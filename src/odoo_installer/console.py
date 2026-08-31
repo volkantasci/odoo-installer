@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from rich.console import Console
 from rich.table import Table
 
+from odoo_installer.core.dbms import DatabaseInfo
 from odoo_installer.core.plan import Step
 from odoo_installer.schemas import CheckResult, CheckStatus, RegistryEntry
 
@@ -69,6 +70,15 @@ def render_registry(entries: Sequence[RegistryEntry]) -> None:
         table.add_row(
             entry.name, str(entry.http_port), str(entry.dir), "yes" if entry.adopted else ""
         )
+    console.print(table)
+
+
+def render_databases(databases: Sequence[DatabaseInfo]) -> None:
+    table = Table(title="databases")
+    table.add_column("Database", style="bold")
+    table.add_column("Size")
+    for info in databases:
+        table.add_row(info.name, info.size)
     console.print(table)
 
 

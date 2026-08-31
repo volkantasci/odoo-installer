@@ -12,6 +12,7 @@ import typer
 
 from odoo_installer import __version__
 from odoo_installer.cli import config as config_cli
+from odoo_installer.cli import db as db_cli
 from odoo_installer.cli import doctor as doctor_cli
 from odoo_installer.cli import install as install_cli
 from odoo_installer.cli import instance as instance_cli
@@ -31,6 +32,7 @@ app = typer.Typer(
 )
 
 app.add_typer(config_cli.app, name="config")
+app.add_typer(db_cli.app, name="db")
 app.add_typer(instance_cli.app, name="instance")
 app.command(name="doctor")(doctor_cli.doctor)
 app.command(name="install")(install_cli.install)
