@@ -12,6 +12,7 @@ from pathlib import Path
 
 from odoo_installer.adapters.docker import ComposeContainerInfo
 from odoo_installer.exceptions import GitHubError, PrerequisiteError, StackError
+from odoo_installer.schemas import RepoSummary
 
 
 class FakeDocker:
@@ -137,8 +138,19 @@ class FakeSystem:
 
 
 class FakeGitHub:
+    def __init__(self, *, branch_exists: bool = True) -> None:
+        self._branch_exists = branch_exists
+        self.branch_checks: list[tuple[str, str]] = []
+
     def ping(self) -> str:
         return "api.github.com reachable (4999 core requests left, unauthenticated)"
+
+    def branch_exists(self, repo: str, branch: str) -> bool:
+        self.branch_checks.append((repo, branch))
+        return self._branch_exists
+
+    def search_repos(self, query: str, limit: int = 10) -> list[RepoSummary]:
+        return []
 
 
 class GitHubDown(FakeGitHub):
@@ -167,13 +179,83 @@ class FakeFs:
 
     def write_text(self, path: Path, content: str, mode: int | None = None) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
+        previous_mode = path.stat().st_mode & 0o777 if path.exists() else None
         tmp = path.with_name(f".{path.name}.tmp")
         tmp.write_text(content, encoding="utf-8")
         os.replace(tmp, path)
-        if mode is not None:
-            path.chmod(mode)
+        final_mode = mode if mode is not None else (previous_mode or 0o644)
+        path.chmod(final_mode)
 
     def remove_tree(self, path: Path) -> None:
         if path == Path(path.anchor):
             raise StackError("refusing to remove filesystem root")
         shutil.rmtree(path, ignore_errors=True)
+
+    def subdirectories(self, path: Path) -> list[Path]:
+        try:
+            entries = [p for p in path.iterdir() if p.is_dir() and not p.name.startswith(".")]
+        except OSError as exc:
+            raise StackError(f"cannot list {path}: {exc}") from exc
+        return sorted(entries, key=lambda p: p.name)
+
+
+class FakeGit:
+    """Records git operations; `existing` paths behave as cloned repositories.
+
+    `clone` materializes `sample_modules` (dirs with __manifest__.py) so module
+    discovery works against the real filesystem of FakeFs.
+    """
+
+    def __init__(
+        self,
+        *,
+        commit: str = "abc1234def5678",
+        existing: set[Path] | None = None,
+        remote: str = "https://github.com/OCA/server-utils.git",
+        branch: str | None = "19.0",
+        sample_modules: tuple[str, ...] = (),
+    ) -> None:
+        self._commit = commit
+        self._existing = existing or set()
+        self._remote = remote
+        self._branch = branch
+        self._sample_modules = sample_modules
+        self.cloned: list[tuple[str, Path]] = []
+        self.fetched: list[Path] = []
+        self.checkouts: list[tuple[Path, str]] = []
+        self.sparse: list[list[str]] = []
+
+    def clone(self, url: str, path: Path) -> str:
+        target = Path(path)
+        self.cloned.append((url, target))
+        target.mkdir(parents=True, exist_ok=True)
+        for module in self._sample_modules:
+            module_dir = target / module
+            module_dir.mkdir(parents=True, exist_ok=True)
+            (module_dir / "__manifest__.py").write_text("{}", encoding="utf-8")
+        self._existing.add(target)
+        return ""
+
+    def fetch(self, path: Path) -> str:
+        self.fetched.append(Path(path))
+        return ""
+
+    def checkout(self, path: Path, ref: str) -> str:
+        self.checkouts.append((Path(path), ref))
+        return ""
+
+    def sparse_checkout_set(self, path: Path, dirs: list[str]) -> str:
+        self.sparse.append(list(dirs))
+        return ""
+
+    def is_repo(self, path: Path) -> bool:
+        return Path(path) in self._existing
+
+    def remote_url(self, path: Path) -> str:
+        return self._remote
+
+    def current_commit(self, path: Path) -> str:
+        return self._commit
+
+    def active_branch(self, path: Path) -> str | None:
+        return self._branch

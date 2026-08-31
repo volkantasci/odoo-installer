@@ -35,11 +35,60 @@ def validate_db_name(name: str) -> str:
     return name
 
 
-def _psql_exec(docker: DockerLike, stack_dir: Path, db_service: str, db_user: str, sql: str) -> str:
+def _psql_exec(
+    docker: DockerLike,
+    stack_dir: Path,
+    db_service: str,
+    db_user: str,
+    sql: str,
+    db: str = "postgres",
+) -> str:
     return docker.compose(
-        ["exec", "-T", db_service, "psql", "-U", db_user, "-d", "postgres", "-At", "-c", sql],
+        ["exec", "-T", db_service, "psql", "-U", db_user, "-d", db, "-At", "-c", sql],
         stack_dir,
     )
+
+
+def execute_sql(
+    docker: DockerLike, stack_dir: Path, db_service: str, db_user: str, db: str, sql: str
+) -> str:
+    """Run internally generated SQL (names already validated) on one database."""
+    return _psql_exec(docker, stack_dir, db_service, db_user, sql, db=db)
+
+
+_MODULE_NAME_PATTERN = r"^[A-Za-z0-9_.-]+$"
+
+
+def module_states(
+    docker: DockerLike,
+    stack_dir: Path,
+    db_service: str,
+    db_user: str,
+    db: str,
+    names: list[str],
+) -> dict[str, str]:
+    """name -> state from ir_module_module for the given modules."""
+    for name in names:
+        if not re.fullmatch(_MODULE_NAME_PATTERN, name):
+            raise StackError(f"invalid module name {name!r}")
+    if not names:
+        return {}
+    list_sql = ", ".join(f"'{name}'" for name in names)
+    out = _psql_exec(
+        docker,
+        stack_dir,
+        db_service,
+        db_user,
+        f"SELECT name, state FROM ir_module_module WHERE name IN ({list_sql}) ORDER BY name",
+        db=db,
+    )
+    states: dict[str, str] = {}
+    for line in out.splitlines():
+        if not line.strip():
+            continue
+        name, _, state = line.partition("|")
+        states[name.strip()] = state.strip()
+    return states
 
 
 def list_databases(

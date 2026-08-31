@@ -43,6 +43,7 @@ class GlobalConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     instances_root: Path = Path.home() / "odoo-instances"
+    repo_root: Path = Path.home() / "odoo-repos"
     default_pg_tag: int = DEFAULT_PG_TAG
     port_range_start: int = PORT_ALLOCATION_START
     port_range_end: int = PORT_ALLOCATION_END
@@ -73,6 +74,27 @@ class Registry(BaseModel):
     instances: dict[str, RegistryEntry] = Field(default_factory=dict)
 
 
+class RepoSummary(BaseModel):
+    """A GitHub repository hit from a module search."""
+
+    full_name: str
+    description: str = ""
+    default_branch: str = ""
+
+
+class RepoRecord(BaseModel):
+    """One OCA repo mounted into an instance (manifest repos list)."""
+
+    repo: str  # "OCA/server-utils"
+    url: str
+    branch: str
+    commit: str
+    host_path: Path
+    container_path: str
+    modules: list[str] = Field(default_factory=list)
+    sparse: bool = False
+
+
 INSTANCE_NAME_PATTERN = r"^[a-z0-9][a-z0-9-]{0,31}$"
 
 
@@ -98,3 +120,4 @@ class InstanceManifest(BaseModel):
     web_service: str = "web"
     db_service: str = "db"
     db_user: str = "odoo"
+    repos: list[RepoRecord] = Field(default_factory=list)
