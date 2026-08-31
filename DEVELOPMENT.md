@@ -82,7 +82,7 @@ odoo-installer test suite [--instance <name>] [--only <repo>] [--modules m1,m2]
     PASS results are recorded in tested.toml; Markdown/JSON report + rich summary
     table. Exit 3 if any module fails.
 
-odoo-installer config show | set <key> <value> | edit
+odoo-installer config show | set <key> <value> | edit | path
 odoo-installer version
 ```
 
@@ -101,12 +101,14 @@ above, and every step is idempotent so users can drive installation manually.
 │ cli/        Typer commands: parse → core → render (rich) │  thin, no logic
 ├─────────────────────────────────────────────────────────┤
 │ core/       Business logic, pure Python, no direct I/O   │  fully unit-testable
-│   prereqs, stack, instances, modules, runner, tester, dbms│
+│   prereqs, stack, instances, modules, runner, tester,    │
+│   plan, dbms                                            │
 ├─────────────────────────────────────────────────────────┤
 │ adapters/   The ONLY code that touches the world          │  behind Protocols
 │   docker, git, github, system, filesystem               │
 ├─────────────────────────────────────────────────────────┤
-│ schemas.py  pydantic models (Instance, ModuleRef, ...)   │
+│ schemas.py  pydantic models (GlobalConfig, Registry,     │
+│   InstanceManifest, RepoRecord, TestedModule, ...)       │
 │ config.py   config resolution + persistence              │
 │ console.py  rich output helpers, plan/dry-run rendering  │
 │ exceptions.py  typed error hierarchy                     │
@@ -115,7 +117,9 @@ above, and every step is idempotent so users can drive installation manually.
 
 Rules:
 
-1. **cli/ never imports adapters.** Commands build inputs, call `core`, render results.
+1. **cli/ commands never import adapters.** Commands build inputs, call `core`, render
+   results. The single exception is the composition root `cli/deps.py`, which wires the
+   real adapters into a `Container` (rule 2).
 2. **core/ depends on adapters only through `typing.Protocol` interfaces** (e.g.
    `DockerLike`, `GitLike`, `SystemLike`), injected as constructor arguments. Tests pass
    fakes; production wires real adapters in `cli/`.
@@ -133,11 +137,13 @@ src/odoo_installer/
 ├── __main__.py            # python -m odoo_installer
 ├── constants.py           # ODOO_VERSION="19.0", DEFAULT_IMAGE="odoo:19.0", ports, names
 ├── exceptions.py
-├── schemas.py             # Instance, ModuleRef, ModuleState, TestReport, PlanStep...
+├── schemas.py             # GlobalConfig, Registry(Entry), InstanceManifest, RepoRecord, TestedModule/Registry
 ├── config.py              # TOML load/merge/save, path resolution (platformdirs)
 ├── console.py             # rich console, tables, plan renderer, --json output
 ├── cli/
 │   ├── main.py            # Typer app assembly, global callbacks, version, completion
+│   ├── deps.py            # composition root: builds Container with real adapters (rule 2)
+│   ├── common.py          # shared command helpers (instance resolution, tested-pass recording)
 │   ├── doctor.py, install.py, instance.py, module.py, db.py, test.py, config.py
 ├── core/
 │   ├── prereqs.py         # host prerequisite checks + install plans (pacman/apt)
@@ -146,6 +152,7 @@ src/odoo_installer/
 │   ├── modules.py         # OCA repo resolution, cloning, module discovery
 │   ├── runner.py          # odoo command execution inside the web container
 │   ├── tester.py          # scratch-DB test runs, log parsing, report building
+│   ├── plan.py            # Step model + apply_steps executor (dry-run/--apply)
 │   └── dbms.py            # database list/create/drop/reset via psql
 ├── adapters/
 │   ├── docker.py          # `docker` / `docker compose` subprocess wrapper
@@ -156,9 +163,10 @@ src/odoo_installer/
 ├── templates/             # docker-compose.yml.j2, odoo.conf.j2, .env.j2 (jinja2)
 └── py.typed
 tests/
-├── unit/                  # fakes only, offline, < 5 s
-├── integration/           # real git/docker, opt-in (marker)
-└── conftest.py            # fixtures: fakes, tmp instance, sample manifests
+└── unit/                  # fakes only, offline, < 5 s
+    └── fakes.py           # FakeDocker, FakeGit, FakeGitHub, FakeSystem, FakeFs
+
+`tests/integration/` (real git/docker, marker `integration`) is deferred to v1.1 — see §8.
 ```
 
 ### 3.3 Dependencies
@@ -176,7 +184,7 @@ Default instances root: `~/odoo-instances/`. One directory per instance:
 ```text
 ~/odoo-instances/<name>/
 ├── docker-compose.yml       # rendered from templates/
-├── .env                     # ODOO_VERSION, POSTGRES_DB/USER/PASSWORD, HTTP_PORT
+├── .env                     # COMPOSE_PROJECT_NAME, ODOO_IMAGE, PG_TAG, HTTP_PORT, POSTGRES_PASSWORD, ADMIN_PASSWD
 ├── config/odoo.conf         # addons_path rewritten by `module add`
 ├── addons/local/            # user's own modules (mounted as /mnt/extra-addons)
 ├── repos/<oca-repo>/        # OCA clones (each mounted as /mnt/oca/<repo>)
@@ -190,19 +198,28 @@ Reference compose shape (what the template must render):
 services:
   web:
     image: odoo:19.0            # .env: ODOO_IMAGE
+    restart: unless-stopped
     depends_on: { db: { condition: service_healthy } }
     ports: ["8069:8069"]        # .env: HTTP_PORT
+    environment:
+      DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: odoo
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - ./config:/etc/odoo
       - ./addons/local:/mnt/extra-addons
-      - ./repos/oca-web:/mnt/oca/web          # one line per added OCA repo
-    command: odoo -c /etc/odoo/odoo.conf
+      # module add appends one line per OCA repo: ./repos/<repo>:/mnt/oca/<repo>
+    command: ["odoo", "-c", "/etc/odoo/odoo.conf"]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8069/web/health"]
-      interval: 30s
-      retries: 5
+      test: ["CMD-SHELL", "curl -f http://localhost:8069/web/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
   db:
     image: postgres:17          # .env: PG_TAG (configurable)
+    restart: unless-stopped
     environment:
       POSTGRES_DB: postgres
       POSTGRES_USER: odoo
@@ -210,7 +227,9 @@ services:
     volumes: [pgdata:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U odoo"]
-      interval: 10s
+      interval: 5s
+      timeout: 5s
+      retries: 30
 volumes: { pgdata: }
 ```
 
@@ -228,6 +247,7 @@ volumes: { pgdata: }
 |------|-------|---------|
 | `~/.config/odoo-installer/config.toml` | global user config | instance root, default ports, default pg tag, GitHub token env var name |
 | `~/.config/odoo-installer/registry.toml` | instance registry | `name → {dir, http_port, created_at, adopted: bool}` |
+| `~/.config/odoo-installer/tested.toml` | installable-addons whitelist | `module → {repo, branch, commit, db, log_path}`; written by `module test` / `test suite` PASSes; `module install`/`upgrade` refuse modules that are not listed unless `--allow-untested` |
 | `<stack>/.odoo-installer.json` | per instance | schema_version, odoo_version, image, pg_tag, applied steps, added repos `{repo, url, branch, commit, modules, mount}`, adopted flag |
 | `<stack>/repos/<repo>/` | OCA clones | git state is the truth for branch/commit; manifest records the last synced commit |
 
@@ -276,7 +296,8 @@ The tool must behave exactly like the documented OCA workflow:
   `3` test failures (test suite) · `4` doctor critical check failed.
 - **Error hierarchy** (`exceptions.py`): `OdooInstallerError` base → `PrerequisiteError`,
   `StackError`, `GitError`, `GitHubError`, `ConfigError`, `ModuleError`, `TestFailureError`.
-  The CLI renders user-facing messages; `--debug` re-raises with traceback.
+  The CLI renders user-facing messages and maps errors to the exit codes above
+  (no `--debug` flag exists in v1.0).
 - **Live instance care:** commands that could touch the production `odoo` DB on this
   machine require an explicit `--db` value (never a default) when the stack is adopted.
   Scratch DBs used by `test` are named `oitest_*` and dropped afterwards unless `--keep-db`.
@@ -290,8 +311,14 @@ Pyramid, enforced by CI:
 | Level | Scope | Rules |
 |-------|-------|-------|
 | Unit (`tests/unit/`) | core + cli against `FakeDocker`, `FakeGit`, `FakeGitHub`, `FakeSystem`, `tmp_path` | offline, deterministic, < 5 s, no markers; every core function's plan generation AND execution paths covered |
-| Integration (`tests/integration/`, marker `integration`, opt-in via `OII_INTEGRATION=1`) | real `git clone` of a small OCA repo, real `docker compose up` on an ephemeral port, full `instance create → module add → module install → test module` cycle on a throwaway stack | run locally and in the CI docker job; tear down everything in `finally` |
+| Integration (`tests/integration/`, marker `integration`, opt-in via `OII_INTEGRATION=1`) — **deferred to v1.1** | real `git clone` of a small OCA repo, real `docker compose up` on an ephemeral port, full `instance create → module add → module install → test module` cycle on a throwaway stack | planned: run locally and in a CI docker job; tear down everything in `finally` |
 | Live smoke (manual, documented) | adopted `~/Projects/odoo-docker` stack | read-mostly commands + one scratch-DB module test; never mutates the `odoo` DB |
+
+**Deferral note (recorded at v0.1.0):** the integration layer and its CI docker job
+were deferred to v1.1 — the M4/M5 acceptance relied on the unit layer plus the
+live-stack smoke instead. The `integration` marker remains registered in
+`pyproject.toml`, but until the layer lands `pytest -m integration` selects zero tests
+and exits 5, so it is **not** part of the v0.1.0 quality gates.
 
 Quality gates (every milestone, all green before merge):
 
@@ -299,15 +326,17 @@ Quality gates (every milestone, all green before merge):
 ruff format --check . && ruff check .
 mypy src
 pytest                                  # unit
-pytest -m integration                   # when docker/git available
+# v1.1: pytest -m integration           # when docker/git available
 pytest --cov=src/odoo_installer --cov-report=term-missing   # keep ≥ 85% overall
 ```
 
-Log-parsing tests use recorded fixture logs (captured from real 19.0 runs) covering:
-pass, test failure, import error, missing manifest, "not installable", addons-path warning.
+Log-parsing tests use inline recorded-style fixture logs (shaped from real 19.0 runs)
+covering: pass, test failure, import error, missing manifest, "not installable",
+addons-path warning.
 
-CI (GitHub Actions): job `lint+types` (ruff, mypy) and job `unit` on Python 3.11/3.12/3.13,
-job `integration` on `ubuntu-latest` (docker available) with the integration marker.
+CI (GitHub Actions): job `lint` (name `lint & types`; ruff format/check, mypy) and job
+`unit` on Python 3.11/3.12/3.13. The docker-based `integration` job lands together with
+the v1.1 integration layer; the workflow file documents this.
 
 ---
 
@@ -387,6 +416,22 @@ rationale in `pyproject.toml`), wheel + sdist pass `twine check` and a clean-ven
 test, README/CHANGELOG finalized, `v0.1.0` tagged. TestPyPI publish left as an optional
 follow-up.
 
+**Deferral note:** the "integration test runs the same flow against a throwaway stack"
+clauses in the M4/M5 acceptance criteria were satisfied via the unit layer + live-stack
+smoke instead; the throwaway-stack integration test layer is deferred to v1.1 (see §8).
+
+### v1.1 roadmap (priority order)
+
+1. **Integration test layer** (`tests/integration/`, marker `integration`) and the CI
+   docker job — the biggest open gap: automated end-to-end
+   `instance create → module add → module install → test module` on a throwaway stack,
+   run locally and in CI.
+2. `module upgrade-repos` — re-sync OCA clones to their recorded 19.0 branches.
+3. apt adapter validation on a real Debian/Ubuntu machine (D3's "later milestone").
+4. Publish to PyPI — README then switches back to `pip install odoo-installer`.
+5. Backlog from §1 non-goals: DB backup/restore, SMTP setup wizard, reverse-proxy/TLS
+   generation.
+
 ---
 
 ## 11. Local development setup
@@ -413,7 +458,7 @@ and the adopted-stack care rules in §7 exist because of it.
 |------|------------|
 | Python 3.14 + pinned deps lag | floor stays 3.11; pin dev deps; venv may use an older interpreter |
 | Odoo weekly image tags drift | default `odoo:19.0`; `--image` override recorded in the manifest |
-| OCA branch moves fast (ocabot bumps) | manifest stores last synced commit; `module upgrade-repos` (M6 stretch) re-syncs |
+| OCA branch moves fast (ocabot bumps) | manifest stores last synced commit; `module upgrade-repos` (deferred to v1.1) re-syncs |
 | Log parsing fragility | parser matched against recorded fixture logs from real runs; exit code is primary signal |
 | Destructive ops on the live stack | plan-first + `--yes`, explicit `--db`, adopted stacks read-mostly, scratch DB naming `oitest_*` |
 | GitHub rate limits | `GITHUB_TOKEN`/`GH_TOKEN` env support; graceful degradation to offline discovery |
