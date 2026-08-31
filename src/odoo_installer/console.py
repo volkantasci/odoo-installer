@@ -9,7 +9,7 @@ from rich.table import Table
 
 from odoo_installer.core.dbms import DatabaseInfo
 from odoo_installer.core.plan import Step
-from odoo_installer.schemas import CheckResult, CheckStatus, RegistryEntry
+from odoo_installer.schemas import CheckResult, CheckStatus, RegistryEntry, RepoSummary
 
 console = Console()
 
@@ -79,6 +79,32 @@ def render_databases(databases: Sequence[DatabaseInfo]) -> None:
     table.add_column("Size")
     for info in databases:
         table.add_row(info.name, info.size)
+    console.print(table)
+
+
+def render_module_rows(rows: Sequence[dict[str, str]], db: str | None) -> None:
+    table = Table(title="modules" if db is None else f"modules (db {db})")
+    table.add_column("Module", style="bold")
+    has_source = bool(rows) and "source" in rows[0]
+    if has_source:
+        table.add_column("Source")
+        table.add_column("Commit")
+    table.add_column("State")
+    for row in rows:
+        if has_source:
+            table.add_row(row["module"], row.get("source", ""), row.get("commit", ""), row["state"])
+        else:
+            table.add_row(row["module"], row["state"])
+    console.print(table)
+
+
+def render_search_results(query: str, results: Sequence[RepoSummary]) -> None:
+    table = Table(title=f"OCA repos matching {query!r}")
+    table.add_column("Repository", style="bold")
+    table.add_column("Default branch")
+    table.add_column("Description", overflow="fold")
+    for item in results:
+        table.add_row(item.full_name, item.default_branch, item.description)
     console.print(table)
 
 
