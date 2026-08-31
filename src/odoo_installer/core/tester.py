@@ -21,6 +21,30 @@ from odoo_installer.core.dbms import execute_sql
 
 _FAILURE_PATTERN = re.compile(r"^(FAIL|ERROR): (.+)$")
 
+# Failure classes proven against recorded fixture logs (DEVELOPMENT.md §8):
+# test_failure, import_error, not_installable, addons_path, manifest, traceback, exit_code
+_KIND_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("test_failure", re.compile(r"^(FAIL|ERROR): ", re.M)),
+    ("import_error", re.compile(r"^(ImportError|ModuleNotFoundError): ", re.M)),
+    ("not_installable", re.compile(r"not installable|Unable to install module")),
+    ("addons_path", re.compile(r"invalid addons directory|option addons_path")),
+    (
+        "manifest",
+        re.compile(
+            r"[Mm]anifest file .{0,60}(not found|missing)|no manifest found|[Mm]issing [Mm]anifest"
+        ),
+    ),
+    ("traceback", re.compile(r"^Traceback \(most recent call last\)", re.M)),
+]
+
+
+def failure_kinds(output: str, exit_code: int) -> list[str]:
+    """Classify a test log into failure kinds; empty list means a clean run."""
+    kinds = [name for name, pattern in _KIND_PATTERNS if pattern.search(output)]
+    if exit_code != 0 and not kinds:
+        kinds.append("exit_code")
+    return kinds
+
 
 @dataclass
 class TestOutcome:
@@ -29,6 +53,7 @@ class TestOutcome:
     passed: bool
     exit_code: int
     failures: list[str] = field(default_factory=list)
+    kinds: list[str] = field(default_factory=list)
     log_path: Path | None = None
     duration_s: float = 0.0
 
@@ -135,6 +160,7 @@ def run_module_test(
         passed=exit_code == 0 and not failures,
         exit_code=exit_code,
         failures=failures,
+        kinds=[] if exit_code == 0 and not failures else failure_kinds(output, exit_code),
         log_path=log_path,
         duration_s=duration,
     )

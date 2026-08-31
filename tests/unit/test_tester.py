@@ -6,7 +6,12 @@ from pathlib import Path
 
 from fakes import FakeDocker, FakeFs
 
-from odoo_installer.core.tester import drop_scratch_db, run_module_test, scratch_db_name
+from odoo_installer.core.tester import (
+    drop_scratch_db,
+    failure_kinds,
+    run_module_test,
+    scratch_db_name,
+)
 
 STACK = Path("/tmp/stack")
 
@@ -72,3 +77,75 @@ def test_drop_scratch_db_helper() -> None:
     assert drop_scratch_db(docker, STACK, "db", "odoo", "mod_y") is True
     docker = FakeDocker(compose_results=[""])
     assert drop_scratch_db(docker, STACK, "db", "odoo", "mod_y") is False
+
+
+# --- failure-kind parsing against recorded-style fixture logs ----------------
+
+PASS_LOG = (
+    "2026-08-31 18:16:59 INFO oitest odoo.tests.common: Importing test framework\n"
+    "2026-08-31 18:17:11 INFO oitest odoo.modules.loading: Loading module web_responsive (25/28)\n"
+    "2026-08-31 18:17:13 INFO oitest odoo.modules.loading: Modules loaded.\n"
+)
+
+TEST_FAILURE_LOG = (
+    "2026-08-31 INFO odoo.tests: Starting TestThing.test_a\n"
+    "FAIL: test_a (odoo.addons.mod_x.tests.test_thing)\n"
+    "Traceback (most recent call last):\n"
+    '  File "x.py", line 1, in test_a\n'
+    "AssertionError: not equal\n"
+    "FAIL: test_b (odoo.addons.mod_x.tests.test_thing)\n"
+)
+
+IMPORT_ERROR_LOG = (
+    "2026-08-31 ERROR odoo.modules.module: Couldn't load module mod_x\n"
+    "ModuleNotFoundError: No module named 'missing_dep'\n"
+)
+
+NOT_INSTALLABLE_LOG = (
+    "WARNING odoo.modules.graph: module mod_x: not installable, skipped\n"
+    "ERROR odoo.modules.loading: Some modules are not loadable: ['mod_x']\n"
+)
+
+ADDONS_PATH_LOG = (
+    "WARNING odoo.tools.config: option addons_path, invalid addons directory "
+    "'/mnt/ghost', skipped\n"
+)
+
+MANIFEST_LOG = "ERROR odoo.modules.module: Missing manifest file for module mod_x\n"
+
+
+def test_failure_kinds_pass_log_is_clean() -> None:
+    assert failure_kinds(PASS_LOG, 0) == []
+
+
+def test_failure_kinds_test_failure() -> None:
+    kinds = failure_kinds(TEST_FAILURE_LOG, 1)
+    assert "test_failure" in kinds
+    assert "traceback" in kinds
+
+
+def test_failure_kinds_import_error() -> None:
+    assert "import_error" in failure_kinds(IMPORT_ERROR_LOG, 1)
+
+
+def test_failure_kinds_not_installable() -> None:
+    assert "not_installable" in failure_kinds(NOT_INSTALLABLE_LOG, 1)
+
+
+def test_failure_kinds_addons_path_warning() -> None:
+    assert "addons_path" in failure_kinds(ADDONS_PATH_LOG, 0)
+
+
+def test_failure_kinds_missing_manifest() -> None:
+    assert "manifest" in failure_kinds(MANIFEST_LOG, 1)
+
+
+def test_failure_kinds_bare_exit_code() -> None:
+    assert failure_kinds("something odd happened", 1) == ["exit_code"]
+
+
+def test_run_module_test_records_kinds() -> None:
+    docker = FakeDocker(compose_result_results=[(1, TEST_FAILURE_LOG)])
+    outcome = run_module_test(docker, STACK, "web", "db", "odoo", FakeFs(), Path("/tmp/l"), "mod_x")
+    assert outcome.passed is False
+    assert "test_failure" in outcome.kinds

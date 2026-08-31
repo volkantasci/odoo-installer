@@ -15,12 +15,11 @@ from typing import Annotated
 import typer
 
 from odoo_installer.cli import deps
-from odoo_installer.cli.common import resolve_instance
+from odoo_installer.cli.common import record_tested_pass, resolve_instance
 from odoo_installer.config import (
     get_tested_module,
     instance_logs_dir,
     load_tested_registry,
-    record_tested_module,
 )
 from odoo_installer.console import (
     console,
@@ -31,7 +30,6 @@ from odoo_installer.console import (
     render_search_results,
     render_test_outcome,
 )
-from odoo_installer.constants import ODOO_VERSION
 from odoo_installer.core.dbms import execute_sql, module_states
 from odoo_installer.core.modules import (
     available_modules,
@@ -42,7 +40,6 @@ from odoo_installer.core.plan import apply_steps
 from odoo_installer.core.runner import install_modules
 from odoo_installer.core.tester import drop_scratch_db, run_module_test
 from odoo_installer.exceptions import OdooInstallerError
-from odoo_installer.schemas import TestedModule
 
 app = typer.Typer(no_args_is_help=True, help="Manage OCA repos and Odoo modules.")
 
@@ -395,21 +392,7 @@ def test(
     render_test_outcome(outcome)
     if not outcome.passed:
         raise typer.Exit(code=3)
-    repo_record = next(
-        (r for r in manifest.repos if module in r.modules or r.repo == available[module]),
-        None,
-    )
-    record_tested_module(
-        TestedModule(
-            name=module,
-            repo=available[module],
-            branch=repo_record.branch if repo_record else ODOO_VERSION,
-            commit=repo_record.commit if repo_record else "",
-            db=outcome.db,
-            log_path=str(outcome.log_path) if outcome.log_path else "",
-        ),
-        path=container.tested_path,
-    )
+    record_tested_pass(container, manifest, module, available[module], outcome)
     console.print(
         f"[green]✔[/green] {module} recorded as tested/installable "
         f"(whitelist: {container.tested_path})"

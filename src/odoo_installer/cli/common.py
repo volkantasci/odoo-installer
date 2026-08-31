@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from odoo_installer.cli import deps
-from odoo_installer.config import load_registry
+from odoo_installer.config import load_registry, record_tested_module
+from odoo_installer.constants import ODOO_VERSION
 from odoo_installer.core.instances import load_manifest
+from odoo_installer.core.tester import TestOutcome
 from odoo_installer.exceptions import StackError
-from odoo_installer.schemas import InstanceManifest
+from odoo_installer.schemas import InstanceManifest, TestedModule
 
 
 def resolve_instance(container: deps.Container, instance_opt: str | None) -> InstanceManifest:
@@ -25,3 +27,25 @@ def resolve_instance(container: deps.Container, instance_opt: str | None) -> Ins
     if manifest is None:
         raise StackError(f"no manifest for instance at {entry.dir}")
     return manifest
+
+
+def record_tested_pass(
+    container: deps.Container,
+    manifest: InstanceManifest,
+    module: str,
+    source: str,
+    outcome: TestOutcome,
+) -> None:
+    """Record a PASSing module in the installable-addons whitelist (tested.toml)."""
+    repo_record = next((r for r in manifest.repos if module in r.modules or r.repo == source), None)
+    record_tested_module(
+        TestedModule(
+            name=module,
+            repo=source,
+            branch=repo_record.branch if repo_record else ODOO_VERSION,
+            commit=repo_record.commit if repo_record else "",
+            db=outcome.db,
+            log_path=str(outcome.log_path) if outcome.log_path else "",
+        ),
+        path=container.tested_path,
+    )

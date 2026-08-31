@@ -38,6 +38,8 @@ class ModuleError(OdooInstallerError):
 class TestFailureError(OdooInstallerError):
     """One or more module tests failed."""
 
+    __test__ = False  # not a pytest test class despite the name
+
 
 __all__ = [
     "ConfigError",

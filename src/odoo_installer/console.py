@@ -121,6 +121,28 @@ def render_test_outcome(outcome: TestOutcome) -> None:
         console.print(f"[dim]log: {outcome.log_path}[/dim]")
 
 
+def render_suite_summary(outcomes: Sequence[TestOutcome]) -> None:
+    table = Table(title="test suite summary")
+    table.add_column("Module", style="bold")
+    table.add_column("Result")
+    table.add_column("Duration (s)")
+    table.add_column("Failure kinds", overflow="fold")
+    for outcome in outcomes:
+        mark = "[green]✔ PASS[/green]" if outcome.passed else "[red]✘ FAIL[/red]"
+        table.add_row(
+            outcome.module,
+            mark,
+            f"{outcome.duration_s:.0f}",
+            ", ".join(outcome.kinds) or "—",
+        )
+    console.print(table)
+    passed = sum(1 for o in outcomes if o.passed)
+    failed = len(outcomes) - passed
+    console.print(
+        f"{len(outcomes)} modules: [green]{passed} passed[/green], [red]{failed} failed[/red]"
+    )
+
+
 def render_search_results(query: str, results: Sequence[RepoSummary]) -> None:
     table = Table(title=f"OCA repos matching {query!r}")
     table.add_column("Repository", style="bold")

@@ -85,6 +85,8 @@ class RepoSummary(BaseModel):
 class TestedModule(BaseModel):
     """One module that passed its test run — the installable-addons whitelist."""
 
+    __test__ = False  # not a pytest test class despite the name
+
     name: str
     repo: str
     branch: str
@@ -96,6 +98,8 @@ class TestedModule(BaseModel):
 
 class TestedRegistry(BaseModel):
     """Contents of tested.toml: modules known to pass their tests."""
+
+    __test__ = False  # not a pytest test class despite the name
 
     modules: dict[str, TestedModule] = Field(default_factory=dict)
 
