@@ -1,7 +1,7 @@
 """Typer application for the odoo-installer CLI.
 
-M0 scope: version reporting only. Milestones M1+ attach command groups here
-(doctor, install, instance, module, db, test, config).
+Command groups attach here milestone by milestone: M1 doctor + config, M2 install +
+instance, M3 db (adoption), M4 module, M5 test.
 """
 
 from __future__ import annotations
@@ -11,6 +11,8 @@ from typing import Annotated
 import typer
 
 from odoo_installer import __version__
+from odoo_installer.cli import config as config_cli
+from odoo_installer.cli import doctor as doctor_cli
 from odoo_installer.constants import APP_NAME
 
 
@@ -25,6 +27,9 @@ app = typer.Typer(
     no_args_is_help=True,
     help="Install, configure and manage Odoo 19.0 Docker stacks with OCA modules.",
 )
+
+app.add_typer(config_cli.app, name="config")
+app.command(name="doctor")(doctor_cli.doctor)
 
 
 @app.callback()

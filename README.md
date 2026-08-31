@@ -29,10 +29,12 @@ odoo-installer --version
 Once installed (editable or from a wheel), the tool exposes:
 
 ```bash
-odoo-installer --version    # also: oii --version, python -m odoo_installer --version
+odoo-installer --version                  # also: oii --version, python -m odoo_installer --version
+odoo-installer doctor [--json]            # host prerequisite checks; exit 4 on critical failure
+odoo-installer config show|set|path       # global configuration (config.toml)
 ```
 
-The full planned command surface (doctor, install, instance, module, db, test) is
+The full planned command surface (install, instance, module, db, test) is
 specified in [DEVELOPMENT.md](DEVELOPMENT.md) §2 and lands milestone by milestone.
 
 ## License
