@@ -414,7 +414,7 @@ TestPyPI publish.
 **Done:** coverage 90.7% (filesystem adapter unit-tested; subprocess adapters omitted with
 rationale in `pyproject.toml`), wheel + sdist pass `twine check` and a clean-venv smoke
 test, README/CHANGELOG finalized, `v0.1.0` tagged. TestPyPI publish left as an optional
-follow-up.
+follow-up; published to PyPI as 0.1.1 (2026-09-01).
 
 **Deferral note:** the "integration test runs the same flow against a throwaway stack"
 clauses in the M4/M5 acceptance criteria were satisfied via the unit layer + live-stack
@@ -428,7 +428,8 @@ smoke instead; the throwaway-stack integration test layer is deferred to v1.1 (s
    run locally and in CI.
 2. `module upgrade-repos` — re-sync OCA clones to their recorded 19.0 branches.
 3. apt adapter validation on a real Debian/Ubuntu machine (D3's "later milestone").
-4. Publish to PyPI — README then switches back to `pip install odoo-installer`.
+4. Publish to PyPI — ✔ done (0.1.1, 2026-09-01); README switched back to
+   `pip install odoo-installer`.
 5. Backlog from §1 non-goals: DB backup/restore, SMTP setup wizard, reverse-proxy/TLS
    generation.
 

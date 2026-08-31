@@ -5,6 +5,24 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-09-01
+
+### Fixed
+
+- DEVELOPMENT.md synced with the v0.1.0 implementation state: composition root
+  (`cli/deps.py`) and `core/plan.py` added to the package layout, real schema model
+  names, the `.env`/compose template contents in §4, `tested.toml` in the state model,
+  and the removed `--debug` claim.
+- The deferred integration test layer and the CI docker job are now recorded as a v1.1
+  roadmap item with a v1.1 priority list.
+- README install instructions no longer claim PyPI availability for the unpublished
+  0.1.0 release.
+- Removed the stale `--debug` traceback claim from the exceptions module docstring.
+
+### Added
+
+- First publication to PyPI (`pip install odoo-installer`).
+
 ## [0.1.0] - 2026-08-31
 
 ### Added

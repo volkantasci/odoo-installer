@@ -16,10 +16,9 @@ The development plan, architecture, decisions, and milestones live in
 ## Installation
 
 ```bash
-# from a checkout (0.1.0 is not yet published to PyPI):
+pip install odoo-installer            # from PyPI (0.1.1+)
+# or from a checkout:
 pip install .
-# or, for development:
-pip install -e ".[dev]"
 ```
 
 Requires Python ≥ 3.11, a working `docker` engine with the `compose` plugin, and `git`.
