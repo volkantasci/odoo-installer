@@ -53,7 +53,7 @@ odoo-installer instance start|stop|restart <name>
 odoo-installer instance remove <name> [--remove-data] [--yes]
     remove defaults to keeping volumes/DBs; --remove-data destroys the pgdata volume.
 odoo-installer instance adopt <dir>
-    Register an EXISTING compose stack (e.g. ~/dev/odoo-docker) without rewriting it.
+    Register an EXISTING compose stack (e.g. ~/Projects/odoo-docker) without rewriting it.
     Adopted stacks are managed read-mostly: exec/psql/logs are allowed; file rewriting is not.
 
 odoo-installer module add <oca-repo> [--modules m1,m2] [--sparse] [--repo PATH] [--apply]
@@ -286,7 +286,7 @@ Pyramid, enforced by CI:
 |-------|-------|-------|
 | Unit (`tests/unit/`) | core + cli against `FakeDocker`, `FakeGit`, `FakeGitHub`, `FakeSystem`, `tmp_path` | offline, deterministic, < 5 s, no markers; every core function's plan generation AND execution paths covered |
 | Integration (`tests/integration/`, marker `integration`, opt-in via `OII_INTEGRATION=1`) | real `git clone` of a small OCA repo, real `docker compose up` on an ephemeral port, full `instance create → module add → module install → test module` cycle on a throwaway stack | run locally and in the CI docker job; tear down everything in `finally` |
-| Live smoke (manual, documented) | adopted `~/dev/odoo-docker` stack | read-mostly commands + one scratch-DB module test; never mutates the `odoo` DB |
+| Live smoke (manual, documented) | adopted `~/Projects/odoo-docker` stack | read-mostly commands + one scratch-DB module test; never mutates the `odoo` DB |
 
 Quality gates (every milestone, all green before merge):
 
@@ -357,7 +357,7 @@ answers `/web/health`, `remove` leaves nothing behind; re-running `create` is a 
 ### M3 — Adoption + databases
 `instance adopt` (detect web/db services, ports, existing addons mounts), `db
 list/create/drop/reset` via psql exec.
-**Done when:** `~/dev/odoo-docker` is adopted, `db list` matches `psql -l`, `db drop`
+**Done when:** `~/Projects/odoo-docker` is adopted, `db list` matches `psql -l`, `db drop`
 refuses without `--yes`.
 
 ### M4 — OCA modules
@@ -397,7 +397,7 @@ odoo-installer --version
 
 Notes for this machine: system Python is 3.14 (Arch); if a pinned dev dependency lags on
 3.14, create the venv with an older interpreter rather than dropping the floor below 3.11.
-The live Odoo 19.0 stack runs at `~/dev/odoo-docker` (ports 8069) — port auto-allocation
+The live Odoo 19.0 stack runs at `~/Projects/odoo-docker` (ports 8069) — port auto-allocation
 and the adopted-stack care rules in §7 exist because of it.
 
 ## 12. Risks & mitigations

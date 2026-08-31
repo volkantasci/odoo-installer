@@ -34,7 +34,9 @@ odoo-installer doctor [--json]            # host prerequisite checks; exit 4 on 
 odoo-installer config show|set|path       # global configuration (config.toml)
 odoo-installer install [--apply]          # host prerequisites (docker, compose, git); plan-first
 odoo-installer instance create <name> [--apply]   # new Odoo stack (dry-run by default)
+odoo-installer instance adopt <dir> [--apply]     # manage an existing compose stack (read-mostly)
 odoo-installer instance list|show|start|stop|restart|remove
+odoo-installer db list|create|drop|reset          # drop/reset need --apply --yes
 ```
 
 The full planned command surface (module, db, test) is

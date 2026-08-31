@@ -35,3 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Docker adapter additions: `compose`, `wait_healthy` (with log capture on failure),
   `logs`; system adapter package/service operations; filesystem adapter atomic
   writes with permission modes (`.env` 0600, `odoo.conf` 0644 for container readability).
+- `instance adopt <dir>`: register an existing compose stack (detected purely from
+  container labels — no compose file parsing) and manage it read-mostly: `start` uses
+  `docker compose start` so adopted stacks are never recreated, and no stack files are
+  rewritten (only the odoo-installer manifest is added).
+- `db` sub-app: `list` (sizes via `pg_database_size`), `create` (idempotent),
+  `drop` and `reset` — executed through `psql` in the db container. Database names are
+  always explicit CLI arguments; `postgres`/`template0`/`template1` refuse to be
+  dropped; `drop`/`reset` are plan-first and execute only with `--apply --yes`.
