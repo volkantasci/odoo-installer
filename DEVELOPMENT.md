@@ -75,9 +75,12 @@ odoo-installer db drop|reset <db> [--instance] [--yes] [--apply]
 odoo-installer module test <name> [--instance] [--keep-db]
     Install the module on a throwaway DB (oitest_<module>_<ts>), run its tests
     (--test-enable --test-tags /<module>), capture and parse the log, print PASS/FAIL.
-odoo-installer test suite [--all] [--include-core] [--only oca] [--output report.{md,json}]
-    Batch over all modules on the stack's addons_path; one scratch DB per module;
-    Markdown/JSON report + rich summary table. Exit 3 if any module fails.
+odoo-installer test suite [--instance <name>] [--only <repo>] [--modules m1,m2]
+                          [--output report.{md,json}] [--keep-db]
+    Batch over the modules of every repo on the stack's addons_path (filter by
+    repo or module list); one scratch DB (oitest_<module>) per module, sequential;
+    PASS results are recorded in tested.toml; Markdown/JSON report + rich summary
+    table. Exit 3 if any module fails.
 
 odoo-installer config show | set <key> <value> | edit
 odoo-installer version
