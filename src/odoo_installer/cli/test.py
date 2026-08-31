@@ -105,7 +105,11 @@ def suite(
         typer.Option("--modules", help="Comma-separated explicit module list."),
     ] = None,
     output: Annotated[
-        Path | None, typer.Option("--output", help="Write a .md or .json report file.")
+        list[Path] | None,
+        typer.Option(
+            "--output",
+            help="Write a .md or .json report file. Repeatable, e.g. --output r.md --output r.json",
+        ),
     ] = None,
     keep_db: Annotated[
         bool, typer.Option("--keep-db", help="Keep each module's scratch database.")
@@ -163,13 +167,14 @@ def suite(
         raise typer.Exit(code=1) from None
 
     render_suite_summary(outcomes)
-    if output is not None:
-        try:
-            _write_report(output, manifest.name, outcomes)
-        except OdooInstallerError as exc:
-            error(str(exc))
-            raise typer.Exit(code=1) from None
-        console.print(f"[green]✔[/green] report written: {output}")
+    if output:
+        for path in output:
+            try:
+                _write_report(path, manifest.name, outcomes)
+            except OdooInstallerError as exc:
+                error(str(exc))
+                raise typer.Exit(code=1) from None
+            console.print(f"[green]✔[/green] report written: {path}")
     failed = sum(1 for o in outcomes if not o.passed)
     if failed:
         raise typer.Exit(code=3)
