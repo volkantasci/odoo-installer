@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from fakes import DockerEngineDown, FakeDocker, FakeFs, FakeGitHub, FakeSystem, GitHubDown
+from fakes import FakeDocker, FakeFs, FakeGitHub, FakeSystem, GitHubDown
 from typer.testing import CliRunner
 
 from odoo_installer.cli.deps import Container
@@ -15,6 +14,8 @@ from odoo_installer.cli.main import app
 from odoo_installer.schemas import GlobalConfig
 
 runner = CliRunner()
+
+ENGINE_DOWN = "docker engine: Cannot connect to the Docker daemon"
 
 
 def make_container(
@@ -24,15 +25,15 @@ def make_container(
     github: FakeGitHub | None = None,
     fs: FakeFs | None = None,
 ) -> Container:
-    container = Container(
+    return Container(
         config=GlobalConfig(instances_root=tmp_path / "instances"),
         config_path=tmp_path / "config.toml",
+        registry_path=tmp_path / "registry.toml",
         docker=docker or FakeDocker(),
         system=system or FakeSystem(),
         github=github or FakeGitHub(),
         fs=fs or FakeFs(),
     )
-    return replace(container, config=container.config)  # keep dataclass shape explicit
 
 
 @pytest.fixture
@@ -71,7 +72,7 @@ def test_doctor_table_renders_without_json(patch_deps, tmp_path: Path) -> None:
 
 
 def test_doctor_exit_4_on_critical_failure(patch_deps, tmp_path: Path) -> None:
-    patch_deps(make_container(tmp_path, docker=DockerEngineDown()))
+    patch_deps(make_container(tmp_path, docker=FakeDocker(engine_error=ENGINE_DOWN)))
     assert runner.invoke(app, ["doctor"]).exit_code == 4
     assert runner.invoke(app, ["doctor", "--json"]).exit_code == 4
 

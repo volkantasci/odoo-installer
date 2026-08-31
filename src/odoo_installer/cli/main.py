@@ -13,6 +13,8 @@ import typer
 from odoo_installer import __version__
 from odoo_installer.cli import config as config_cli
 from odoo_installer.cli import doctor as doctor_cli
+from odoo_installer.cli import install as install_cli
+from odoo_installer.cli import instance as instance_cli
 from odoo_installer.constants import APP_NAME
 
 
@@ -29,7 +31,9 @@ app = typer.Typer(
 )
 
 app.add_typer(config_cli.app, name="config")
+app.add_typer(instance_cli.app, name="instance")
 app.command(name="doctor")(doctor_cli.doctor)
+app.command(name="install")(install_cli.install)
 
 
 @app.callback()

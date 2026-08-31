@@ -7,7 +7,8 @@ from collections.abc import Sequence
 from rich.console import Console
 from rich.table import Table
 
-from odoo_installer.schemas import CheckResult, CheckStatus
+from odoo_installer.core.plan import Step
+from odoo_installer.schemas import CheckResult, CheckStatus, RegistryEntry
 
 console = Console()
 
@@ -37,6 +38,38 @@ def render_checks(checks: Sequence[CheckResult]) -> None:
         f"[yellow]{counts[CheckStatus.WARN]} warn[/yellow], "
         f"[red]{counts[CheckStatus.FAIL]} fail[/red]"
     )
+
+
+def render_plan(steps: Sequence[Step], title: str) -> None:
+    """Render a plan for dry-run inspection."""
+    console.print(f"[bold]{title}[/bold]")
+    for index, step in enumerate(steps, start=1):
+        if step.already_satisfied:
+            console.print(
+                f"  {index:2d}. [green]✔[/green] {step.description} [dim](already satisfied)[/dim]"
+            )
+        else:
+            console.print(f"  {index:2d}. [cyan]→[/cyan] {step.description}")
+    console.print("[dim]dry run — re-run with --apply to execute[/dim]")
+
+
+def render_results(steps: Sequence[Step], notes: Sequence[str]) -> None:
+    """Render applied plan step results."""
+    for step, note in zip(steps, notes, strict=True):
+        console.print(f"[green]✔[/green] {step.description} — {note}")
+
+
+def render_registry(entries: Sequence[RegistryEntry]) -> None:
+    table = Table(title="instances")
+    table.add_column("Name", style="bold")
+    table.add_column("HTTP port")
+    table.add_column("Directory", overflow="fold")
+    table.add_column("Adopted")
+    for entry in entries:
+        table.add_row(
+            entry.name, str(entry.http_port), str(entry.dir), "yes" if entry.adopted else ""
+        )
+    console.print(table)
 
 
 def error(message: str) -> None:

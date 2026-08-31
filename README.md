@@ -32,9 +32,12 @@ Once installed (editable or from a wheel), the tool exposes:
 odoo-installer --version                  # also: oii --version, python -m odoo_installer --version
 odoo-installer doctor [--json]            # host prerequisite checks; exit 4 on critical failure
 odoo-installer config show|set|path       # global configuration (config.toml)
+odoo-installer install [--apply]          # host prerequisites (docker, compose, git); plan-first
+odoo-installer instance create <name> [--apply]   # new Odoo stack (dry-run by default)
+odoo-installer instance list|show|start|stop|restart|remove
 ```
 
-The full planned command surface (install, instance, module, db, test) is
+The full planned command surface (module, db, test) is
 specified in [DEVELOPMENT.md](DEVELOPMENT.md) §2 and lands milestone by milestone.
 
 ## License

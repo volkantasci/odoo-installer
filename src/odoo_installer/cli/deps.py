@@ -13,16 +13,21 @@ from odoo_installer.adapters.docker import DockerAdapter
 from odoo_installer.adapters.filesystem import FileSystemAdapter
 from odoo_installer.adapters.github import GitHubAdapter
 from odoo_installer.adapters.system import SystemAdapter
-from odoo_installer.config import default_config_path, load_global_config
+from odoo_installer.config import (
+    default_config_path,
+    default_registry_path,
+    load_global_config,
+)
 from odoo_installer.schemas import GlobalConfig
 
 
 @dataclass
 class Container:
-    """Everything a command needs: resolved config plus wired adapters."""
+    """Everything a command needs: resolved config, file paths, wired adapters."""
 
     config: GlobalConfig
     config_path: Path
+    registry_path: Path
     docker: DockerAdapter
     system: SystemAdapter
     github: GitHubAdapter
@@ -35,6 +40,7 @@ def build(config_path: Path | None = None) -> Container:
     return Container(
         config=config,
         config_path=path,
+        registry_path=default_registry_path(),
         docker=DockerAdapter(),
         system=SystemAdapter(),
         github=GitHubAdapter(token_env=config.github_token_env),

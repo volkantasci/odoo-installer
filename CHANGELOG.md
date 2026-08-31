@@ -23,3 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`~/.config/odoo-installer/config.toml`); instance registry load/save helpers for M2.
 - Host adapters (docker, system, github, filesystem) behind `Protocol` interfaces;
   unit tests run fully offline against fakes.
+- `install` command: plan-first host prerequisite installation (docker engine, compose
+  plugin, git) via pacman/apt with `--apply`; idempotent — satisfied hosts are no-ops.
+- `instance` sub-app: `create` (dry-run plan → `--apply`, auto port allocation in the
+  configured range, jinja-rendered `docker-compose.yml`/`.env`/`odoo.conf`, generated
+  secrets persisted across re-runs, `docker compose up -d` + health wait),
+  `list`, `show`, `start`, `stop`, `restart`, and `remove` (dry-run by default;
+  execution requires `--apply --yes`; `--remove-data` destroys the pgdata volume).
+- Instance state: registry (`registry.toml`) plus per-instance manifest
+  (`.odoo-installer.json`); `create` re-runs are idempotent and pin the recorded port.
+- Docker adapter additions: `compose`, `wait_healthy` (with log capture on failure),
+  `logs`; system adapter package/service operations; filesystem adapter atomic
+  writes with permission modes (`.env` 0600, `odoo.conf` 0644 for container readability).
