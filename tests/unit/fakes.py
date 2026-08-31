@@ -10,6 +10,7 @@ import os
 import shutil
 from pathlib import Path
 
+from odoo_installer.adapters.docker import ComposeContainerInfo
 from odoo_installer.exceptions import GitHubError, PrerequisiteError, StackError
 
 
@@ -22,15 +23,20 @@ class FakeDocker:
         engine_error: str | None = None,
         compose_error: str | None = None,
         healthy: bool = True,
+        containers: list[dict[str, str]] | None = None,
+        compose_results: list[str] | None = None,
     ) -> None:
         self._engine_version = engine_version
         self._compose_version = compose_version
         self._engine_error = engine_error
         self._compose_error = compose_error
         self._healthy = healthy
+        self._containers = containers or []
+        self.compose_results = compose_results if compose_results is not None else []
         self.compose_calls: list[tuple[tuple[str, ...], Path]] = []
         self.health_checks: list[str] = []
         self.logged: list[str] = []
+        self.container_queries: list[Path] = []
 
     def engine_version(self) -> str:
         if self._engine_error is not None:
@@ -44,7 +50,24 @@ class FakeDocker:
 
     def compose(self, args: list[str], project_dir: Path, timeout_s: int = 300) -> str:
         self.compose_calls.append((tuple(args), Path(project_dir)))
+        if self.compose_results:
+            return self.compose_results.pop(0)
         return f"compose {' '.join(args)} ok"
+
+    def compose_containers(self, working_dir: Path) -> list[ComposeContainerInfo]:
+        self.container_queries.append(Path(working_dir))
+        return [
+            ComposeContainerInfo(
+                name=c["name"],
+                service=c.get("service", ""),
+                project=c.get("project", ""),
+                working_dir=str(working_dir),
+                image=c.get("image", ""),
+                ports=c.get("ports", ""),
+                state=c.get("state", "running"),
+            )
+            for c in self._containers
+        ]
 
     def wait_healthy(self, container: str, timeout_s: int = 240, poll_s: int = 3) -> str:
         self.health_checks.append(container)

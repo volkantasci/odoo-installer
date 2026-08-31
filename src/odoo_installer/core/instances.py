@@ -13,7 +13,7 @@ import secrets
 from dataclasses import dataclass
 from pathlib import Path
 
-from odoo_installer.adapters.docker import DockerLike
+from odoo_installer.adapters.docker import DockerLike, host_port_for
 from odoo_installer.adapters.filesystem import FileSystemLike
 from odoo_installer.adapters.system import SystemLike
 from odoo_installer.config import load_registry, save_registry
@@ -292,9 +292,18 @@ def _manifest_step(
     return Step(description=f"write {MANIFEST_NAME}", run=run)
 
 
-def compose_action(action: str, stack_dir: Path, docker: DockerLike) -> str:
-    """Run a reversible lifecycle action directly (no plan needed)."""
-    args = {"start": ["up", "-d"], "stop": ["stop"], "restart": ["restart"]}
+def compose_action(action: str, stack_dir: Path, docker: DockerLike, adopted: bool = False) -> str:
+    """Run a reversible lifecycle action directly (no plan needed).
+
+    Adopted stacks are managed read-mostly: `start` uses `docker compose start`,
+    which only boots existing containers and can never recreate them from a
+    changed compose file.
+    """
+    args = {
+        "start": ["start"] if adopted else ["up", "-d"],
+        "stop": ["stop"],
+        "restart": ["restart"],
+    }
     if action not in args:
         raise StackError(f"unknown lifecycle action {action!r}")
     return docker.compose(args[action], stack_dir) or action
@@ -356,3 +365,147 @@ def _registered_dir(name: str, registry_path: Path) -> Path:
     if entry is None:
         raise StackError(f"instance {name!r} is not registered")
     return entry.dir
+
+
+@dataclass
+class DetectedStack:
+    """Result of inspecting an existing compose project's containers."""
+
+    project: str
+    web_service: str
+    db_service: str
+    web_image: str
+    db_image: str
+    http_port: int
+
+
+def detect_stack(docker: DockerLike, stack_dir: Path) -> DetectedStack:
+    """Classify an existing compose project's containers into web/db services.
+
+    Detection uses container labels only — the compose file is never parsed, so
+    stacks with env-var interpolation or multiple config files still adopt.
+    """
+    containers = docker.compose_containers(stack_dir)
+    if not containers:
+        raise StackError(
+            f"no compose containers found for {stack_dir} "
+            "(the stack was never created or was removed)"
+        )
+    project = ""
+    web: str | None = None
+    db: str | None = None
+    web_image = db_image = ""
+    web_ports = ""
+    for container in containers:
+        project = container.project or project
+        if "postgres" in container.image and db is None:
+            db = container.service
+            db_image = container.image
+        elif (
+            "odoo" in container.image or host_port_for(container.ports, 8069) is not None
+        ) and web is None:
+            web = container.service
+            web_image = container.image
+            web_ports = container.ports
+    if web is None or db is None:
+        found = ", ".join(sorted({c.service for c in containers if c.service})) or "none"
+        raise StackError(
+            f"cannot identify the web/db services in {stack_dir} (found services: {found})"
+        )
+    http_port = host_port_for(web_ports, 8069)
+    if http_port is None:
+        raise StackError(
+            f"web service {web!r} publishes no host port for container port 8069; "
+            "a stack the CLI cannot reach cannot be adopted"
+        )
+    return DetectedStack(
+        project=project,
+        web_service=web,
+        db_service=db,
+        web_image=web_image,
+        db_image=db_image,
+        http_port=http_port,
+    )
+
+
+def _guess_odoo_version(web_image: str) -> str:
+    tag = web_image.rsplit(":", 1)[-1]
+    return "19.0" if tag in {"19", "19.0"} else tag
+
+
+def _guess_pg_tag(db_image: str) -> int:
+    tag = db_image.rsplit(":", 1)[-1]
+    digits = tag.split("-", 1)[0]
+    return int(digits) if digits.isdigit() else 0
+
+
+def adopt_instance_plan(
+    *,
+    name: str,
+    stack_dir: Path,
+    detected: DetectedStack,
+    db_user: str,
+    fs: FileSystemLike,
+    registry_path: Path,
+) -> InstancePlan:
+    """Plan for adopting an existing stack: manifest + registry only (read-mostly)."""
+    manifest = load_manifest(fs, stack_dir)
+    if manifest is not None:
+        raise StackError(
+            f"{stack_dir} already has {MANIFEST_NAME} "
+            "(it was created or adopted by odoo-installer before)"
+        )
+    registry = load_registry(registry_path)
+    existing = registry.instances.get(name)
+    if existing is not None and existing.dir != stack_dir:
+        raise StackError(f"instance name {name!r} is already registered for {existing.dir}")
+    odoo_version = _guess_odoo_version(detected.web_image)
+    pg_tag = _guess_pg_tag(detected.db_image)
+
+    def write_manifest() -> str:
+        save_manifest(
+            fs,
+            InstanceManifest(
+                name=name,
+                dir=stack_dir,
+                odoo_version=odoo_version,
+                image=detected.web_image,
+                pg_tag=pg_tag,
+                http_port=detected.http_port,
+                adopted=True,
+                web_service=detected.web_service,
+                db_service=detected.db_service,
+                db_user=db_user,
+            ),
+        )
+        return "created"
+
+    def register() -> str:
+        upsert_registry_entry(
+            registry_path,
+            RegistryEntry(
+                name=name,
+                dir=stack_dir,
+                http_port=detected.http_port,
+                adopted=True,
+            ),
+        )
+        return "registered"
+
+    return InstancePlan(
+        name=name,
+        stack_dir=stack_dir,
+        http_port=detected.http_port,
+        odoo_image=detected.web_image,
+        pg_tag=pg_tag,
+        steps=[
+            Step(
+                description=f"write {MANIFEST_NAME} into {stack_dir} (adopted, read-mostly)",
+                run=write_manifest,
+            ),
+            Step(
+                description=f"register instance {name!r} in the registry (adopted)",
+                run=register,
+            ),
+        ],
+    )

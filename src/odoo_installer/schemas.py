@@ -94,3 +94,7 @@ class InstanceManifest(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     adopted: bool = False
     applied_steps: list[str] = Field(default_factory=list)
+    # service layout inside the compose project (adopted stacks may differ)
+    web_service: str = "web"
+    db_service: str = "db"
+    db_user: str = "odoo"

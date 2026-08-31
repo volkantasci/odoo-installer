@@ -2,13 +2,29 @@
 
 from __future__ import annotations
 
+import json
+import re
 import shutil
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
 from odoo_installer.exceptions import PrerequisiteError, StackError
+
+
+@dataclass
+class ComposeContainerInfo:
+    """One container belonging to a compose project (from docker ps labels)."""
+
+    name: str
+    service: str
+    project: str
+    working_dir: str
+    image: str
+    ports: str
+    state: str
 
 
 class DockerLike(Protocol):
@@ -19,6 +35,7 @@ class DockerLike(Protocol):
     def compose(self, args: list[str], project_dir: Path, timeout_s: int = 300) -> str: ...
     def wait_healthy(self, container: str, timeout_s: int = 240, poll_s: int = 3) -> str: ...
     def logs(self, container: str, tail: int = 40) -> str: ...
+    def compose_containers(self, working_dir: Path) -> list[ComposeContainerInfo]: ...
 
 
 class DockerAdapter:
@@ -84,6 +101,42 @@ class DockerAdapter:
         )
         return ((proc.stdout or "") + (proc.stderr or "")).strip()
 
+    def compose_containers(self, working_dir: Path) -> list[ComposeContainerInfo]:
+        """All containers (any state) whose compose project working_dir matches."""
+        cmd = [
+            "docker",
+            "ps",
+            "-a",
+            "--filter",
+            f"label=com.docker.compose.project.working_dir={working_dir}",
+            "--format",
+            "{{json .}}",
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=False)
+        if proc.returncode != 0:
+            raise StackError(f"docker ps failed: {(proc.stderr or '').strip()}")
+        containers: list[ComposeContainerInfo] = []
+        for line in proc.stdout.splitlines():
+            if not line.strip():
+                continue
+            try:
+                raw = json.loads(line)
+            except ValueError as exc:
+                raise StackError(f"unexpected docker ps output: {line[:120]}") from exc
+            labels = _parse_labels(raw.get("Labels", ""))
+            containers.append(
+                ComposeContainerInfo(
+                    name=raw.get("Names", ""),
+                    service=labels.get("com.docker.compose.service", ""),
+                    project=labels.get("com.docker.compose.project", ""),
+                    working_dir=labels.get("com.docker.compose.project.working_dir", ""),
+                    image=raw.get("Image", ""),
+                    ports=raw.get("Ports", ""),
+                    state=raw.get("State", ""),
+                )
+            )
+        return containers
+
     def _run(self, cmd: list[str], what: str) -> str:
         if shutil.which(cmd[0]) is None:
             raise PrerequisiteError(f"{what}: '{cmd[0]}' binary not found on PATH")
@@ -95,3 +148,19 @@ class DockerAdapter:
             detail = (exc.stderr or "").strip() or f"exit code {exc.returncode}"
             raise PrerequisiteError(f"{what}: {detail}") from exc
         return proc.stdout.strip()
+
+
+def _parse_labels(labels: str) -> dict[str, str]:
+    """Parse docker ps's flat comma-separated `key=value` Labels string."""
+    parsed: dict[str, str] = {}
+    for part in labels.split(","):
+        key, sep, value = part.partition("=")
+        if sep:
+            parsed[key.strip()] = value.strip()
+    return parsed
+
+
+def host_port_for(ports: str, container_port: int) -> int | None:
+    """Host port published to `container_port` from a docker ps Ports string."""
+    match = re.search(rf":(\d+)->{container_port}/tcp", ports)
+    return int(match.group(1)) if match else None

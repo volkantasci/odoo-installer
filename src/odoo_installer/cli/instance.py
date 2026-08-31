@@ -12,8 +12,10 @@ from odoo_installer.config import load_registry
 from odoo_installer.console import console, error, render_plan, render_registry, render_results
 from odoo_installer.constants import DEFAULT_ODOO_IMAGE
 from odoo_installer.core.instances import (
+    adopt_instance_plan,
     compose_action,
     create_instance_plan,
+    detect_stack,
     instance_dir,
     load_manifest,
     remove_instance_plan,
@@ -203,8 +205,63 @@ def _lifecycle(name: str, action: str) -> None:
         manifest = load_manifest(container.fs, stack_dir)
         if manifest is None:
             raise StackError(f"no manifest for instance {name!r} in {stack_dir}")
-        note = compose_action(action, stack_dir, container.docker)
+        note = compose_action(action, stack_dir, container.docker, adopted=manifest.adopted)
     except OdooInstallerError as exc:
         error(str(exc))
         raise typer.Exit(code=1) from None
     console.print(f"[green]✔[/green] {name}: {action} — {note}")
+
+
+@app.command("adopt")
+def adopt(
+    dir_path: Annotated[
+        Path,
+        typer.Argument(
+            help="Directory of the existing compose stack.",
+            exists=True,
+            file_okay=False,
+            resolve_path=True,
+        ),
+    ],
+    *,
+    name_opt: Annotated[
+        str | None,
+        typer.Option("--name", help="Instance name (default: compose project name)."),
+    ] = None,
+    db_user: Annotated[
+        str, typer.Option("--db-user", help="Postgres role inside the db container.")
+    ] = "odoo",
+    apply_changes: Annotated[bool, typer.Option("--apply", help=_APPLY_HELP)] = False,
+) -> None:
+    """Adopt an existing compose stack; managed read-mostly (no file rewrites)."""
+    container = deps.build()
+    try:
+        detected = detect_stack(container.docker, dir_path)
+        instance_name = validate_instance_name(name_opt or detected.project)
+        plan = adopt_instance_plan(
+            name=instance_name,
+            stack_dir=dir_path,
+            detected=detected,
+            db_user=db_user,
+            fs=container.fs,
+            registry_path=container.registry_path,
+        )
+    except OdooInstallerError as exc:
+        error(str(exc))
+        raise typer.Exit(code=1) from None
+    console.print(
+        f"detected: project [bold]{detected.project}[/bold], web service "
+        f"[bold]{detected.web_service}[/bold] ({detected.web_image}) on port "
+        f"{detected.http_port}, db service [bold]{detected.db_service}[/bold] "
+        f"({detected.db_image})"
+    )
+    if not apply_changes:
+        render_plan(plan.steps, f"Instance adopt plan: {plan.name}")
+        return
+    try:
+        notes = apply_steps(plan.steps)
+    except OdooInstallerError as exc:
+        error(str(exc))
+        raise typer.Exit(code=1) from None
+    render_results(plan.steps, notes)
+    console.print(f"[green]✔[/green] instance {plan.name!r} adopted (read-mostly)")
