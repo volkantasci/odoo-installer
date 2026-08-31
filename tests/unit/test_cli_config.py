@@ -22,6 +22,7 @@ def make_container(tmp_path: Path) -> Container:
         config=GlobalConfig(instances_root=tmp_path / "instances"),
         config_path=tmp_path / "config.toml",
         registry_path=tmp_path / "registry.toml",
+        tested_path=tmp_path / "tested.toml",
         git=FakeGit(),
         docker=FakeDocker(),
         system=FakeSystem(),

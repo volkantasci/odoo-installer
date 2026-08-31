@@ -39,7 +39,8 @@ odoo-installer instance list|show|start|stop|restart|remove
 odoo-installer db list|create|drop|reset          # drop/reset need --apply --yes
 odoo-installer module add <oca-repo> [--sparse] [--repo <checkout>] [--apply]
 odoo-installer module list [--db DB] [--json] | search <query>
-odoo-installer module install|upgrade <module...> --db DB
+odoo-installer module test <module>          # scratch-db test run; PASS -> whitelist
+odoo-installer module install|upgrade <module...> --db DB   # refuses untested modules
 odoo-installer module remove <repo> [--purge-repo] [--apply]
 ```
 

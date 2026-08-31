@@ -17,6 +17,7 @@ from odoo_installer.adapters.system import SystemAdapter
 from odoo_installer.config import (
     default_config_path,
     default_registry_path,
+    default_tested_path,
     load_global_config,
 )
 from odoo_installer.schemas import GlobalConfig
@@ -29,6 +30,7 @@ class Container:
     config: GlobalConfig
     config_path: Path
     registry_path: Path
+    tested_path: Path
     docker: DockerAdapter
     git: GitAdapter
     system: SystemAdapter
@@ -43,6 +45,7 @@ def build(config_path: Path | None = None) -> Container:
         config=config,
         config_path=path,
         registry_path=default_registry_path(),
+        tested_path=default_tested_path(),
         docker=DockerAdapter(),
         git=GitAdapter(),
         system=SystemAdapter(),

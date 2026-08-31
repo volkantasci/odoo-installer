@@ -16,6 +16,12 @@ import typer
 
 from odoo_installer.cli import deps
 from odoo_installer.cli.common import resolve_instance
+from odoo_installer.config import (
+    get_tested_module,
+    instance_logs_dir,
+    load_tested_registry,
+    record_tested_module,
+)
 from odoo_installer.console import (
     console,
     error,
@@ -23,7 +29,9 @@ from odoo_installer.console import (
     render_plan,
     render_results,
     render_search_results,
+    render_test_outcome,
 )
+from odoo_installer.constants import ODOO_VERSION
 from odoo_installer.core.dbms import execute_sql, module_states
 from odoo_installer.core.modules import (
     available_modules,
@@ -32,7 +40,9 @@ from odoo_installer.core.modules import (
 )
 from odoo_installer.core.plan import apply_steps
 from odoo_installer.core.runner import install_modules
+from odoo_installer.core.tester import drop_scratch_db, run_module_test
 from odoo_installer.exceptions import OdooInstallerError
+from odoo_installer.schemas import TestedModule
 
 app = typer.Typer(no_args_is_help=True, help="Manage OCA repos and Odoo modules.")
 
@@ -149,6 +159,10 @@ def list_modules(
                     "state": "",
                 }
             )
+        tested = load_tested_registry(container.tested_path).modules
+        for row in rows:
+            entry = tested.get(row["module"])
+            row["tested"] = entry.tested_at.strftime("%Y-%m-%d") if entry else ""
         if db is not None:
             states = module_states(
                 container.docker,
@@ -197,6 +211,7 @@ def _run_modules(
     db: str,
     instance: str | None,
     upgrade: bool,
+    allow_untested: bool = False,
 ) -> None:
     container = deps.build()
     try:
@@ -207,6 +222,13 @@ def _run_modules(
             raise OdooInstallerError(
                 f"modules not visible to this instance: {', '.join(missing)}; "
                 "run 'module add' first"
+            )
+        untested = [m for m in modules if get_tested_module(m, path=container.tested_path) is None]
+        if untested and not allow_untested:
+            raise OdooInstallerError(
+                "not tested yet: "
+                + ", ".join(untested)
+                + " — run 'module test <name>' first, or pass --allow-untested"
             )
         output = install_modules(
             container.docker,
@@ -246,9 +268,16 @@ def install(
     *,
     db: Annotated[str, typer.Option("--db", help=_DB_HELP)],
     instance: Annotated[str | None, typer.Option("--instance", help=_INSTANCE_HELP)] = None,
+    allow_untested: Annotated[
+        bool,
+        typer.Option(
+            "--allow-untested",
+            help="Skip the tested-addons whitelist check (whitelist: tested.toml).",
+        ),
+    ] = False,
 ) -> None:
     """Install modules into an explicit database (odoo -i, scratch DBs recommended)."""
-    _run_modules(modules, db=db, instance=instance, upgrade=False)
+    _run_modules(modules, db=db, instance=instance, upgrade=False, allow_untested=allow_untested)
 
 
 @app.command("upgrade")
@@ -257,9 +286,16 @@ def upgrade(
     *,
     db: Annotated[str, typer.Option("--db", help=_DB_HELP)],
     instance: Annotated[str | None, typer.Option("--instance", help=_INSTANCE_HELP)] = None,
+    allow_untested: Annotated[
+        bool,
+        typer.Option(
+            "--allow-untested",
+            help="Skip the tested-addons whitelist check (whitelist: tested.toml).",
+        ),
+    ] = False,
 ) -> None:
     """Upgrade modules in an explicit database (odoo -u)."""
-    _run_modules(modules, db=db, instance=instance, upgrade=True)
+    _run_modules(modules, db=db, instance=instance, upgrade=True, allow_untested=allow_untested)
 
 
 @app.command("remove")
@@ -311,3 +347,70 @@ def remove(
         raise typer.Exit(code=1) from None
     render_results(plan.steps, notes)
     console.print(f"[green]✔[/green] {plan.repo} removed")
+
+
+@app.command("test")
+def test(
+    module: Annotated[str, typer.Argument(help="Module to test on a scratch database.")],
+    *,
+    instance: Annotated[str | None, typer.Option("--instance", help=_INSTANCE_HELP)] = None,
+    keep_db: Annotated[
+        bool, typer.Option("--keep-db", help="Keep the scratch database for debugging.")
+    ] = False,
+) -> None:
+    """Test a module: install on a scratch DB, run its tests, record PASS.
+
+    A PASS is recorded in the installable-addons whitelist (tested.toml); `module
+    install` refuses untested modules unless --allow-untested is given.
+    """
+    container = deps.build()
+    try:
+        manifest = resolve_instance(container, instance)
+        available = available_modules(container.fs, manifest)
+        if module not in available:
+            raise OdooInstallerError(
+                f"module {module!r} is not visible to this instance; run 'module add' first"
+            )
+        outcome = run_module_test(
+            container.docker,
+            manifest.dir,
+            manifest.web_service,
+            manifest.db_service,
+            manifest.db_user,
+            container.fs,
+            instance_logs_dir(manifest),
+            module,
+        )
+        if not keep_db:
+            drop_scratch_db(
+                container.docker,
+                manifest.dir,
+                manifest.db_service,
+                manifest.db_user,
+                module,
+            )
+    except OdooInstallerError as exc:
+        error(str(exc))
+        raise typer.Exit(code=1) from None
+    render_test_outcome(outcome)
+    if not outcome.passed:
+        raise typer.Exit(code=3)
+    repo_record = next(
+        (r for r in manifest.repos if module in r.modules or r.repo == available[module]),
+        None,
+    )
+    record_tested_module(
+        TestedModule(
+            name=module,
+            repo=available[module],
+            branch=repo_record.branch if repo_record else ODOO_VERSION,
+            commit=repo_record.commit if repo_record else "",
+            db=outcome.db,
+            log_path=str(outcome.log_path) if outcome.log_path else "",
+        ),
+        path=container.tested_path,
+    )
+    console.print(
+        f"[green]✔[/green] {module} recorded as tested/installable "
+        f"(whitelist: {container.tested_path})"
+    )

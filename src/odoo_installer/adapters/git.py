@@ -13,7 +13,9 @@ from odoo_installer.exceptions import GitError
 class GitLike(Protocol):
     """What core/ may ask of git."""
 
-    def clone(self, url: str, path: Path) -> str: ...
+    def clone(
+        self, url: str, path: Path, branch: str | None = None, depth: int | None = None
+    ) -> str: ...
     def fetch(self, path: Path) -> str: ...
     def checkout(self, path: Path, ref: str) -> str: ...
     def sparse_checkout_set(self, path: Path, dirs: list[str]) -> str: ...
@@ -26,8 +28,17 @@ class GitLike(Protocol):
 class GitAdapter:
     """Thin wrapper around the `git` CLI; raises GitError on failure."""
 
-    def clone(self, url: str, path: Path) -> str:
-        return self._run(["git", "clone", url, str(path)], f"clone {url}", timeout_s=900)
+    def clone(
+        self, url: str, path: Path, branch: str | None = None, depth: int | None = None
+    ) -> str:
+        """Clone; `branch`+`depth` give a shallow single-branch clone (big repos)."""
+        cmd = ["git", "clone"]
+        if branch is not None:
+            cmd += ["--branch", branch]
+        if depth is not None:
+            cmd += ["--depth", str(depth), "--single-branch"]
+        cmd += [url, str(path)]
+        return self._run(cmd, f"clone {url}", timeout_s=1800)
 
     def fetch(self, path: Path) -> str:
         return self._run(["git", "fetch", "origin"], f"fetch {path}", cwd=path, timeout_s=300)

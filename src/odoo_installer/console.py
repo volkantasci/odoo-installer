@@ -9,6 +9,7 @@ from rich.table import Table
 
 from odoo_installer.core.dbms import DatabaseInfo
 from odoo_installer.core.plan import Step
+from odoo_installer.core.tester import TestOutcome
 from odoo_installer.schemas import CheckResult, CheckStatus, RegistryEntry, RepoSummary
 
 console = Console()
@@ -89,13 +90,35 @@ def render_module_rows(rows: Sequence[dict[str, str]], db: str | None) -> None:
     if has_source:
         table.add_column("Source")
         table.add_column("Commit")
+    has_tested = any("tested" in row for row in rows)
+    if has_tested:
+        table.add_column("Tested")
     table.add_column("State")
     for row in rows:
+        cells = [row["module"]]
         if has_source:
-            table.add_row(row["module"], row.get("source", ""), row.get("commit", ""), row["state"])
-        else:
-            table.add_row(row["module"], row["state"])
+            cells += [row.get("source", ""), row.get("commit", "")]
+        if has_tested:
+            cells.append(row.get("tested", ""))
+        cells.append(row.get("state", ""))
+        table.add_row(*cells)
     console.print(table)
+
+
+def render_test_outcome(outcome: TestOutcome) -> None:
+    mark = "[green]✔ PASS[/green]" if outcome.passed else "[red]✘ FAIL[/red]"
+    console.print(
+        f"{mark} {outcome.module} on scratch db {outcome.db!r} "
+        f"({outcome.duration_s:.0f}s, exit {outcome.exit_code})"
+    )
+    if outcome.failures:
+        console.print("[red]failing tests:[/red]")
+        for failure in outcome.failures[:10]:
+            console.print(f"  {failure}")
+        if len(outcome.failures) > 10:
+            console.print(f"  ... and {len(outcome.failures) - 10} more")
+    if outcome.log_path is not None:
+        console.print(f"[dim]log: {outcome.log_path}[/dim]")
 
 
 def render_search_results(query: str, results: Sequence[RepoSummary]) -> None:

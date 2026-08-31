@@ -82,6 +82,24 @@ class RepoSummary(BaseModel):
     default_branch: str = ""
 
 
+class TestedModule(BaseModel):
+    """One module that passed its test run — the installable-addons whitelist."""
+
+    name: str
+    repo: str
+    branch: str
+    commit: str = ""
+    tested_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    db: str = ""
+    log_path: str = ""
+
+
+class TestedRegistry(BaseModel):
+    """Contents of tested.toml: modules known to pass their tests."""
+
+    modules: dict[str, TestedModule] = Field(default_factory=dict)
+
+
 class RepoRecord(BaseModel):
     """One OCA repo mounted into an instance (manifest repos list)."""
 

@@ -33,6 +33,9 @@ class DockerLike(Protocol):
     def engine_version(self) -> str: ...
     def compose_version(self) -> str: ...
     def compose(self, args: list[str], project_dir: Path, timeout_s: int = 300) -> str: ...
+    def compose_result(
+        self, args: list[str], project_dir: Path, timeout_s: int = 300
+    ) -> tuple[int, str]: ...
     def wait_healthy(self, container: str, timeout_s: int = 240, poll_s: int = 3) -> str: ...
     def logs(self, container: str, tail: int = 40) -> str: ...
     def compose_containers(self, working_dir: Path) -> list[ComposeContainerInfo]: ...
@@ -65,6 +68,26 @@ class DockerAdapter:
             detail = (exc.stderr or "").strip() or f"exit code {exc.returncode}"
             raise StackError(f"docker compose {' '.join(args)}: {detail}") from exc
         return proc.stdout.strip()
+
+    def compose_result(
+        self, args: list[str], project_dir: Path, timeout_s: int = 300
+    ) -> tuple[int, str]:
+        """Run a compose command without raising on non-zero exit; returns (code, output).
+
+        Test runs EXPECT failures — the exit code is data, not an adapter error.
+        """
+        try:
+            proc = subprocess.run(
+                ["docker", "compose", *args],
+                cwd=project_dir,
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise StackError(f"docker compose {' '.join(args)}: timed out") from exc
+        return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
 
     def wait_healthy(self, container: str, timeout_s: int = 240, poll_s: int = 3) -> str:
         """Poll the container healthcheck until healthy; attach logs on failure."""

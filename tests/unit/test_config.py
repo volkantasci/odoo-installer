@@ -8,7 +8,13 @@ import pytest
 
 from odoo_installer import config as config_mod
 from odoo_installer.exceptions import ConfigError
-from odoo_installer.schemas import GlobalConfig, Registry, RegistryEntry
+from odoo_installer.schemas import (
+    GlobalConfig,
+    Registry,
+    RegistryEntry,
+    TestedModule,
+    TestedRegistry,
+)
 
 
 def test_missing_file_yields_defaults(tmp_path: Path) -> None:
@@ -93,3 +99,19 @@ def test_registry_roundtrip(tmp_path: Path) -> None:
 
 def test_registry_missing_file_yields_empty(tmp_path: Path) -> None:
     assert config_mod.load_registry(tmp_path / "registry.toml") == Registry()
+
+
+def test_tested_registry_roundtrip(tmp_path: Path) -> None:
+    path = tmp_path / "tested.toml"
+    record = TestedModule(name="web_responsive", repo="OCA/web", branch="19.0", commit="abc")
+    registry = TestedRegistry(modules={"web_responsive": record})
+    config_mod.save_tested_registry(registry, path)
+    loaded = config_mod.load_tested_registry(path)
+    assert loaded.modules["web_responsive"].repo == "OCA/web"
+
+    config_mod.record_tested_module(
+        TestedModule(name="second", repo="OCA/x", branch="19.0"), path=path
+    )
+    assert set(config_mod.load_tested_registry(path).modules) == {"web_responsive", "second"}
+    assert config_mod.get_tested_module("web_responsive", path=path) is not None
+    assert config_mod.get_tested_module("nope", path=path) is None

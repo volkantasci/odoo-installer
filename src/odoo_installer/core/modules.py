@@ -301,9 +301,9 @@ def module_add_plan(
             git.checkout(host_path, f"origin/{branch}")
             note = "fetched and checked out"
         else:
-            git.clone(url, host_path)
+            git.clone(url, host_path, branch=branch, depth=1)
             git.checkout(host_path, f"origin/{branch}")
-            note = "cloned and checked out"
+            note = "cloned and checked out (shallow)"
         if sparse and modules_opt:
             git.sparse_checkout_set(host_path, modules_opt)
             note += " (sparse)"

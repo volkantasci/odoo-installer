@@ -26,6 +26,7 @@ class FakeDocker:
         healthy: bool = True,
         containers: list[dict[str, str]] | None = None,
         compose_results: list[str] | None = None,
+        compose_result_results: list[tuple[int, str]] | None = None,
     ) -> None:
         self._engine_version = engine_version
         self._compose_version = compose_version
@@ -34,6 +35,9 @@ class FakeDocker:
         self._healthy = healthy
         self._containers = containers or []
         self.compose_results = compose_results if compose_results is not None else []
+        self.compose_result_results = (
+            compose_result_results if compose_result_results is not None else []
+        )
         self.compose_calls: list[tuple[tuple[str, ...], Path]] = []
         self.health_checks: list[str] = []
         self.logged: list[str] = []
@@ -54,6 +58,14 @@ class FakeDocker:
         if self.compose_results:
             return self.compose_results.pop(0)
         return f"compose {' '.join(args)} ok"
+
+    def compose_result(
+        self, args: list[str], project_dir: Path, timeout_s: int = 300
+    ) -> tuple[int, str]:
+        self.compose_calls.append((tuple(args), Path(project_dir)))
+        if self.compose_result_results:
+            return self.compose_result_results.pop(0)
+        return 0, f"compose {' '.join(args)} ok"
 
     def compose_containers(self, working_dir: Path) -> list[ComposeContainerInfo]:
         self.container_queries.append(Path(working_dir))
@@ -224,8 +236,12 @@ class FakeGit:
         self.fetched: list[Path] = []
         self.checkouts: list[tuple[Path, str]] = []
         self.sparse: list[list[str]] = []
+        self.clone_opts: list[tuple[str | None, int | None]] = []
 
-    def clone(self, url: str, path: Path) -> str:
+    def clone(
+        self, url: str, path: Path, branch: str | None = None, depth: int | None = None
+    ) -> str:
+        self.clone_opts.append((branch, depth))
         target = Path(path)
         self.cloned.append((url, target))
         target.mkdir(parents=True, exist_ok=True)

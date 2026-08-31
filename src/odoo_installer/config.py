@@ -19,7 +19,13 @@ import tomli_w
 
 from odoo_installer.constants import APP_NAME
 from odoo_installer.exceptions import ConfigError
-from odoo_installer.schemas import GlobalConfig, Registry
+from odoo_installer.schemas import (
+    GlobalConfig,
+    InstanceManifest,
+    Registry,
+    TestedModule,
+    TestedRegistry,
+)
 
 
 def app_config_dir() -> Path:
@@ -33,6 +39,47 @@ def default_config_path() -> Path:
 
 def default_registry_path() -> Path:
     return app_config_dir() / "registry.toml"
+
+
+def default_tested_path() -> Path:
+    return app_config_dir() / "tested.toml"
+
+
+def load_tested_registry(path: Path | None = None) -> TestedRegistry:
+    path = path or default_tested_path()
+    if not path.exists():
+        return TestedRegistry()
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        raise ConfigError(f"cannot read tested registry {path}: {exc}") from exc
+    try:
+        return TestedRegistry.model_validate(data)
+    except ValueError as exc:
+        raise ConfigError(f"invalid tested registry {path}: {exc}") from exc
+
+
+def save_tested_registry(registry: TestedRegistry, path: Path | None = None) -> None:
+    path = path or default_tested_path()
+    _atomic_write_toml(path, registry.model_dump(mode="json"))
+
+
+def record_tested_module(record: TestedModule, path: Path | None = None) -> None:
+    registry = load_tested_registry(path)
+    registry.modules[record.name] = record
+    save_tested_registry(registry, path)
+
+
+def get_tested_module(name: str, path: Path | None = None) -> TestedModule | None:
+    return load_tested_registry(path).modules.get(name)
+
+
+def instance_logs_dir(manifest: InstanceManifest) -> Path:
+    """Where test logs go: the stack dir for created instances, XDG state for
+    adopted ones (read-mostly — we never write into an adopted stack)."""
+    if manifest.adopted:
+        return Path(platformdirs.user_state_dir(APP_NAME, appauthor=False)) / "logs" / manifest.name
+    return manifest.dir / "logs"
 
 
 def load_global_config(path: Path | None = None) -> GlobalConfig:

@@ -36,6 +36,7 @@ def make_container(tmp_path: Path, docker: FakeDocker | None = None) -> Containe
         config=GlobalConfig(instances_root=tmp_path / "instances", repo_root=tmp_path / "repos"),
         config_path=tmp_path / "config.toml",
         registry_path=tmp_path / "registry.toml",
+        tested_path=tmp_path / "tested.toml",
         docker=docker or FakeDocker(),
         git=FakeGit(sample_modules=("server_util_foo",)),
         system=FakeSystem(),
@@ -174,7 +175,16 @@ def test_module_install_runs_odoo_and_reports_state(patch_deps, tmp_path: Path) 
 
     result = runner.invoke(
         app,
-        ["module", "install", "server_util_foo", "--db", "oitest_mods", "--instance", "dev"],
+        [
+            "module",
+            "install",
+            "server_util_foo",
+            "--db",
+            "oitest_mods",
+            "--instance",
+            "dev",
+            "--allow-untested",
+        ],
     )
     assert result.exit_code == 0, result.output
     exec_calls = [args for args, _ in container.docker.compose_calls if args[0] == "exec"]
@@ -191,7 +201,16 @@ def test_module_install_failure_state_exits_1(patch_deps, tmp_path: Path) -> Non
     container.docker.compose_results = ["", "server_util_foo|uninstallable\n"]
     result = runner.invoke(
         app,
-        ["module", "install", "server_util_foo", "--db", "oitest_mods", "--instance", "dev"],
+        [
+            "module",
+            "install",
+            "server_util_foo",
+            "--db",
+            "oitest_mods",
+            "--instance",
+            "dev",
+            "--allow-untested",
+        ],
     )
     assert result.exit_code == 1
     assert "not in 'installed' state" in result.output
@@ -203,7 +222,16 @@ def test_module_upgrade_uses_u_flag(patch_deps, tmp_path: Path) -> None:
     container.docker.compose_results = ["", "server_util_foo|installed\n"]
     result = runner.invoke(
         app,
-        ["module", "upgrade", "server_util_foo", "--db", "dev", "--instance", "dev"],
+        [
+            "module",
+            "upgrade",
+            "server_util_foo",
+            "--db",
+            "dev",
+            "--instance",
+            "dev",
+            "--allow-untested",
+        ],
     )
     assert result.exit_code == 0, result.output
     exec_calls = [args for args, _ in container.docker.compose_calls if args[0] == "exec"]

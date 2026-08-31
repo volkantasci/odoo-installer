@@ -60,3 +60,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `filesystem.write_text` now preserves an existing file's permission mode across
   atomic replacement — edits of container-mounted configs (odoo.conf) no longer
   accidentally become unreadable to the container's odoo user.
+- `module test <name>`: installs the module on a throwaway `oitest_<module>`
+  database, runs `--test-enable --test-tags=/<module>` inside the web container,
+  captures the full log (XDG state dir for adopted stacks), and prints PASS/FAIL
+  (exit 3 on failure). A PASS is recorded in the installable-addons whitelist
+  (`~/.config/odoo-installer/tested.toml`) with repo, branch, commit and log path.
+- Installable-addons whitelist enforcement: `module install`/`upgrade` refuse
+  untested modules unless `--allow-untested` is passed; `module list` shows a
+  Tested column.
+- Shallow single-branch clones (`--depth 1 --branch 19.0`) for owned clones —
+  big repos like OCA/web now cost ~22 MB instead of hundreds.
