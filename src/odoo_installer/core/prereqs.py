@@ -14,7 +14,8 @@ from odoo_installer.adapters.filesystem import FileSystemLike
 from odoo_installer.adapters.github import GitHubLike
 from odoo_installer.adapters.system import SystemLike
 from odoo_installer.constants import DEFAULT_HTTP_PORT
-from odoo_installer.exceptions import OdooInstallerError
+from odoo_installer.core.plan import Step
+from odoo_installer.exceptions import OdooInstallerError, PrerequisiteError
 from odoo_installer.schemas import CheckResult, CheckStatus, GlobalConfig
 
 DISK_FAIL_GIB = 2.0
@@ -168,3 +169,41 @@ def _check_github(github: GitHubLike) -> CheckResult:
             detail=str(exc),
             fix_hint="check network or set the token env var; needed only for OCA module search",
         )
+
+
+def host_install_plan(docker: DockerLike, system: SystemLike) -> list[Step]:
+    """Plan steps to make host prerequisites ready; an empty list means satisfied."""
+    steps: list[Step] = []
+    try:
+        docker.engine_version()
+    except OdooInstallerError:
+        if system.which("docker") is None:
+            steps.append(_package_step(system, "docker", "docker.io"))
+        else:
+            steps.append(
+                Step(
+                    description="enable and start the docker service",
+                    run=lambda: system.enable_service("docker"),
+                )
+            )
+    try:
+        docker.compose_version()
+    except OdooInstallerError:
+        steps.append(_package_step(system, "docker-compose", "docker-compose-plugin"))
+    if system.which("git") is None:
+        steps.append(_package_step(system, "git", "git"))
+    return steps
+
+
+def _package_step(system: SystemLike, pacman_pkg: str, apt_pkg: str) -> Step:
+    family = system.package_manager()
+    if family is None:
+        raise PrerequisiteError(
+            "cannot determine the package manager; install manually: "
+            f"{pacman_pkg} (pacman) or {apt_pkg} (apt)"
+        )
+    packages = apt_pkg if family == "apt" else pacman_pkg
+    return Step(
+        description=f"install {packages} ({family})",
+        run=lambda: system.install_packages([packages]),
+    )

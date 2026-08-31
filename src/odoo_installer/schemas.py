@@ -71,3 +71,26 @@ class Registry(BaseModel):
     """Contents of registry.toml."""
 
     instances: dict[str, RegistryEntry] = Field(default_factory=dict)
+
+
+INSTANCE_NAME_PATTERN = r"^[a-z0-9][a-z0-9-]{0,31}$"
+
+
+class InstanceManifest(BaseModel):
+    """Per-instance state file (.odoo-installer.json) inside the stack directory.
+
+    Deliberately secret-free: credentials live only in .env and config/odoo.conf.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: int = 1
+    name: str = Field(pattern=INSTANCE_NAME_PATTERN)
+    dir: Path
+    odoo_version: str
+    image: str
+    pg_tag: int
+    http_port: int
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    adopted: bool = False
+    applied_steps: list[str] = Field(default_factory=list)

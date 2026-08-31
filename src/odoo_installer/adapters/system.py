@@ -1,4 +1,4 @@
-"""Host system adapter: PATH lookups, port probing, groups, distro family."""
+"""Host system adapter: PATH lookups, port probing, groups, distro family, packages."""
 
 from __future__ import annotations
 
@@ -7,8 +7,11 @@ import os
 import pwd
 import shutil
 import socket
+import subprocess
 from pathlib import Path
 from typing import Protocol
+
+from odoo_installer.exceptions import PrerequisiteError
 
 _PACMAN_IDS = {"arch", "manjaro", "omarchy", "endeavouros"}
 _APT_IDS = {"debian", "ubuntu", "linuxmint", "pop"}
@@ -22,6 +25,8 @@ class SystemLike(Protocol):
     def current_username(self) -> str: ...
     def group_members(self, group: str) -> list[str] | None: ...
     def package_manager(self) -> str | None: ...
+    def install_packages(self, packages: list[str]) -> str: ...
+    def enable_service(self, name: str) -> str: ...
 
 
 class SystemAdapter:
@@ -53,6 +58,34 @@ class SystemAdapter:
             return list(grp.getgrnam(group).gr_mem)
         except KeyError:
             return None
+
+    def install_packages(self, packages: list[str]) -> str:
+        """Install packages via the distro package manager (requires sudo)."""
+        family = self.package_manager()
+        if family == "apt":
+            cmd = ["sudo", "apt-get", "install", "-y", *packages]
+        elif family == "pacman":
+            cmd = ["sudo", "pacman", "-S", "--noconfirm", *packages]
+        else:
+            raise PrerequisiteError(
+                "unknown package manager; install manually: " + ", ".join(packages)
+            )
+        return self._sudo_run(cmd, f"install {', '.join(packages)}")
+
+    def enable_service(self, name: str) -> str:
+        return self._sudo_run(
+            ["sudo", "systemctl", "enable", "--now", name], f"enable service {name}"
+        )
+
+    def _sudo_run(self, cmd: list[str], what: str) -> str:
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600, check=True)
+        except subprocess.TimeoutExpired as exc:
+            raise PrerequisiteError(f"{what}: command timed out") from exc
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or "").strip() or f"exit code {exc.returncode}"
+            raise PrerequisiteError(f"{what}: {detail}") from exc
+        return proc.stdout.strip() or "done"
 
     def package_manager(self) -> str | None:
         """Map the running distro to pacman/apt, or None if unknown."""

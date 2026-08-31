@@ -4,15 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fakes import (
-    ComposeMissing,
-    DockerEngineDown,
-    FakeDocker,
-    FakeFs,
-    FakeGitHub,
-    FakeSystem,
-    GitHubDown,
-)
+from fakes import FakeDocker, FakeFs, FakeGitHub, FakeSystem, GitHubDown
 
 from odoo_installer.core.prereqs import run_doctor
 from odoo_installer.schemas import CheckStatus, GlobalConfig
@@ -45,13 +37,13 @@ def test_all_green_environment() -> None:
 
 
 def test_docker_engine_down_fails_with_pacman_hint() -> None:
-    statuses = _run(docker=DockerEngineDown())
+    statuses = _run(docker=FakeDocker(engine_error="engine down"))
     assert statuses["docker engine"] == "fail"
 
 
 def test_docker_engine_hint_uses_apt_when_debian() -> None:
     checks = run_doctor(
-        DockerEngineDown(),
+        FakeDocker(engine_error="engine down"),
         FakeSystem(family="apt"),
         FakeGitHub(),
         FakeFs(),
@@ -63,7 +55,7 @@ def test_docker_engine_hint_uses_apt_when_debian() -> None:
 
 
 def test_compose_missing_fails() -> None:
-    statuses = _run(docker=ComposeMissing())
+    statuses = _run(docker=FakeDocker(compose_error="compose missing"))
     assert statuses["docker compose"] == "fail"
 
 
