@@ -1,6 +1,6 @@
 """Typed error hierarchy for odoo-installer.
 
-The CLI renders user-facing messages from these; `--debug` re-raises with traceback
+The CLI renders user-facing messages from these and maps them to exit codes
 (DEVELOPMENT.md §7).
 """
 
