@@ -37,6 +37,10 @@ odoo-installer instance create <name> [--apply]   # new Odoo stack (dry-run by d
 odoo-installer instance adopt <dir> [--apply]     # manage an existing compose stack (read-mostly)
 odoo-installer instance list|show|start|stop|restart|remove
 odoo-installer db list|create|drop|reset          # drop/reset need --apply --yes
+odoo-installer module add <oca-repo> [--sparse] [--repo <checkout>] [--apply]
+odoo-installer module list [--db DB] [--json] | search <query>
+odoo-installer module install|upgrade <module...> --db DB
+odoo-installer module remove <repo> [--purge-repo] [--apply]
 ```
 
 The full planned command surface (module, db, test) is
