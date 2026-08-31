@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.0] - 2026-08-31
 
 ### Added
 
@@ -70,3 +70,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Tested column.
 - Shallow single-branch clones (`--depth 1 --branch 19.0`) for owned clones —
   big repos like OCA/web now cost ~22 MB instead of hundreds.
+- `config edit`: opens `config.toml` in `$EDITOR`, validates the result before
+  saving, and refuses invalid edits (nothing is written).
+- `test suite`: batch-tests every module on an instance's addons_path (filter by
+  `--only <repo>` or `--modules m1,m2`), one scratch DB per module, sequential;
+  PASSes feed the whitelist; Markdown/JSON reports with `--output` (repeatable,
+  e.g. `--output report.md --output report.json`); rich summary; exit 3 on any
+  failure; `--keep-db` keeps scratch databases.
+- Test failure classification: logs are parsed into failure kinds (test failure,
+  import error, not installable, addons_path, manifest, traceback, exit code).
+- Test tooling: `tests/unit/test_filesystem.py` covers the filesystem adapter's
+  mode-preservation semantics directly; the docker/git/github/system adapters
+  (thin subprocess/network wrappers exercised live) are omitted from coverage,
+  which is pinned at ≥ 85%.
