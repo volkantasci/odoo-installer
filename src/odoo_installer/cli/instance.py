@@ -133,7 +133,7 @@ def show(name: str) -> None:
 
 @app.command("start")
 def start(name: str) -> None:
-    """Start the instance's stack (docker compose up -d)."""
+    """Start the instance's stack (up -d; adopted stacks: compose start, no recreate)."""
     _lifecycle(name, "start")
 
 

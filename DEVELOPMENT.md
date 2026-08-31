@@ -37,7 +37,7 @@ Locked in with the project owner before implementation:
 ## 2. Product scope — command surface
 
 ```text
-odoo-installer doctor [--json] [--fix]
+odoo-installer doctor [--json]
     Host diagnostics: docker engine, compose plugin, git, disk space, port conflicts,
     github.com reachability, user-in-docker-group. Exit code 4 when a critical check fails.
 
@@ -67,10 +67,12 @@ odoo-installer module upgrade <name...> [--db DB]
     Run `odoo -d <db> -i/-u <name> --stop-after-init --http-port=8071` inside the web container.
 odoo-installer module remove <name...> [--db DB] [--purge-repo] [--yes]
 
-odoo-installer db list | create | drop | reset --db NAME [--yes]
+odoo-installer db list [--instance] | create <db> [--instance]
+    The database name is always an explicit positional argument, never a default.
+odoo-installer db drop|reset <db> [--instance] [--yes] [--apply]
     Executed through psql in the db container. drop/reset always require --yes.
 
-odoo-installer test module <name> [--db DB] [--keep-db] [--report FILE]
+odoo-installer module test <name> [--instance] [--keep-db]
     Install the module on a throwaway DB (oitest_<module>_<ts>), run its tests
     (--test-enable --test-tags /<module>), capture and parse the log, print PASS/FAIL.
 odoo-installer test suite [--all] [--include-core] [--only oca] [--output report.{md,json}]
