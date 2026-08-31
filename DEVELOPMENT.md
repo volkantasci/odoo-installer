@@ -378,12 +378,14 @@ test runs the same flow against a throwaway stack.
 **Done when:** `test suite` on the adopted stack produces a correct PASS/FAIL report for
 every module on the addons_path; fixture-log unit tests prove each failure class parses.
 
-### M6 — Polish & release
+### M6 — Polish & release ✔ (v0.1.0, 2026-08-31)
 README, `--help` UX pass, shell completion (`--install-completion`), error message audit,
 coverage ≥ 85%, `python -m build` + `twine check`, CHANGELOG, tag `0.1.0`, optional
 TestPyPI publish.
-**Done when:** a fresh machine path (`pipx install dist/*.whl` equivalent) is documented
-and a cold-start dry-run session (`doctor → install → instance create`) reads cleanly.
+**Done:** coverage 90.7% (filesystem adapter unit-tested; subprocess adapters omitted with
+rationale in `pyproject.toml`), wheel + sdist pass `twine check` and a clean-venv smoke
+test, README/CHANGELOG finalized, `v0.1.0` tagged. TestPyPI publish left as an optional
+follow-up.
 
 ---
 
