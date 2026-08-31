@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from fakes import FakeDocker, FakeFs, FakeGitHub, FakeSystem
+from fakes import FakeDocker, FakeFs, FakeGit, FakeGitHub, FakeSystem
 from typer.testing import CliRunner
 
 from odoo_installer.cli.deps import Container
@@ -25,6 +25,7 @@ def make_container(
         config=GlobalConfig(instances_root=tmp_path / "instances"),
         config_path=tmp_path / "config.toml",
         registry_path=tmp_path / "registry.toml",
+        git=FakeGit(),
         docker=docker or FakeDocker(),
         system=system or FakeSystem(),
         github=FakeGitHub(),

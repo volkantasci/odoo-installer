@@ -13,7 +13,7 @@ from typing import Annotated
 import typer
 
 from odoo_installer.cli import deps
-from odoo_installer.config import load_registry
+from odoo_installer.cli.common import resolve_instance
 from odoo_installer.console import console, error, render_databases, render_plan, render_results
 from odoo_installer.core.dbms import (
     create_database,
@@ -21,32 +21,13 @@ from odoo_installer.core.dbms import (
     list_databases,
     reset_database_plan,
 )
-from odoo_installer.core.instances import load_manifest
 from odoo_installer.core.plan import apply_steps
-from odoo_installer.exceptions import OdooInstallerError, StackError
-from odoo_installer.schemas import InstanceManifest
+from odoo_installer.exceptions import OdooInstallerError
 
 app = typer.Typer(no_args_is_help=True, help="Manage databases of an Odoo instance.")
 
 _APPLY_HELP = "Execute the plan (without it, this is a dry run)."
 _INSTANCE_HELP = "Target instance (default: the only registered instance)."
-
-
-def _resolve_instance(container: deps.Container, instance_opt: str | None) -> InstanceManifest:
-    registry = load_registry(container.registry_path)
-    if instance_opt is not None:
-        entry = registry.instances.get(instance_opt)
-        if entry is None:
-            raise StackError(f"instance {instance_opt!r} is not registered")
-    elif len(registry.instances) == 1:
-        entry = next(iter(registry.instances.values()))
-    else:
-        names = ", ".join(sorted(registry.instances)) or "none"
-        raise StackError(f"multiple instances registered ({names}); specify --instance")
-    manifest = load_manifest(container.fs, entry.dir)
-    if manifest is None:
-        raise StackError(f"no manifest for instance at {entry.dir}")
-    return manifest
 
 
 @app.command("list")
@@ -57,7 +38,7 @@ def list_dbs(
     """List the databases of the instance's db container."""
     container = deps.build()
     try:
-        manifest = _resolve_instance(container, instance)
+        manifest = resolve_instance(container, instance)
         databases = list_databases(
             container.docker, manifest.dir, manifest.db_service, manifest.db_user
         )
@@ -79,7 +60,7 @@ def create_db(
     """Create an empty database; reports when it already exists."""
     container = deps.build()
     try:
-        manifest = _resolve_instance(container, instance)
+        manifest = resolve_instance(container, instance)
         note = create_database(
             container.docker, manifest.dir, manifest.db_service, manifest.db_user, db_name
         )
@@ -102,7 +83,7 @@ def drop_db(
     """Drop a database. Dry-run by default; execution requires --apply --yes."""
     container = deps.build()
     try:
-        manifest = _resolve_instance(container, instance)
+        manifest = resolve_instance(container, instance)
         steps = drop_database_plan(
             container.docker, manifest.dir, manifest.db_service, manifest.db_user, db_name
         )
@@ -137,7 +118,7 @@ def reset_db(
     """Drop and recreate a database (empty). Requires --apply --yes."""
     container = deps.build()
     try:
-        manifest = _resolve_instance(container, instance)
+        manifest = resolve_instance(container, instance)
         steps = reset_database_plan(
             container.docker, manifest.dir, manifest.db_service, manifest.db_user, db_name
         )

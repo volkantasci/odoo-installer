@@ -1,0 +1,313 @@
+"""`odoo-installer module` — OCA repository and module management.
+
+Safety (DEVELOPMENT.md §6/§7): the 19.0 branch is verified via the GitHub API before
+cloning; user checkouts (--repo) are never mutated; adopted stacks get file edits only
+with explicit --yes and are never restarted (the CLI reports the restart instead);
+module install/upgrade always require an explicit --db (use oitest_* scratch names).
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Annotated
+
+import typer
+
+from odoo_installer.cli import deps
+from odoo_installer.cli.common import resolve_instance
+from odoo_installer.console import (
+    console,
+    error,
+    render_module_rows,
+    render_plan,
+    render_results,
+    render_search_results,
+)
+from odoo_installer.core.dbms import execute_sql, module_states
+from odoo_installer.core.modules import (
+    available_modules,
+    module_add_plan,
+    module_remove_plan,
+)
+from odoo_installer.core.plan import apply_steps
+from odoo_installer.core.runner import install_modules
+from odoo_installer.exceptions import OdooInstallerError
+
+app = typer.Typer(no_args_is_help=True, help="Manage OCA repos and Odoo modules.")
+
+_APPLY_HELP = "Execute the plan (without it, this is a dry run)."
+_INSTANCE_HELP = "Target instance (default: the only registered instance)."
+_DB_HELP = "Target database (required; use oitest_* scratch names for testing)."
+
+
+@app.command("add")
+def add(
+    repo: Annotated[
+        str, typer.Argument(help="OCA repo, e.g. 'OCA/server-tools' or 'server-tools'.")
+    ],
+    *,
+    modules_opt: Annotated[
+        str | None,
+        typer.Option("--modules", help="Comma-separated module list (default: all discovered)."),
+    ] = None,
+    sparse: Annotated[
+        bool, typer.Option("--sparse", help="Sparse-checkout only the requested modules.")
+    ] = False,
+    repo_path: Annotated[
+        str | None,
+        typer.Option(
+            "--repo",
+            help="Mount an existing local checkout instead of cloning (never mutated).",
+        ),
+    ] = None,
+    fork: Annotated[
+        str | None,
+        typer.Option("--fork", help="Clone from your fork (origin=<fork>, branch verified there)."),
+    ] = None,
+    instance: Annotated[str | None, typer.Option("--instance", help=_INSTANCE_HELP)] = None,
+    yes: Annotated[
+        bool,
+        typer.Option(
+            "--yes",
+            help="Explicit confirmation for file edits on ADOPTED stacks (required there).",
+        ),
+    ] = False,
+    apply_changes: Annotated[bool, typer.Option("--apply", help=_APPLY_HELP)] = False,
+) -> None:
+    """Add an OCA repo: verify the 19.0 branch, clone/mount, extend addons_path."""
+    container = deps.build()
+    module_names = [m.strip() for m in modules_opt.split(",") if m.strip()] if modules_opt else None
+    try:
+        manifest = resolve_instance(container, instance)
+        plan = module_add_plan(
+            config=container.config,
+            manifest=manifest,
+            repo_arg=repo,
+            modules_opt=module_names,
+            sparse=sparse,
+            fork=fork,
+            existing_repo=Path(repo_path) if repo_path else None,
+            github=container.github,
+            git=container.git,
+            fs=container.fs,
+            docker=container.docker,
+        )
+    except OdooInstallerError as exc:
+        error(str(exc))
+        raise typer.Exit(code=1) from None
+    console.print(
+        f"repo [bold]{plan.repo}[/bold] at branch [bold]{plan.branch}[/bold] -> "
+        f"{plan.host_path}:{plan.container_path}"
+    )
+    if not apply_changes:
+        render_plan(plan.steps, f"Module add plan: {plan.repo}")
+        return
+    if manifest.adopted and not yes:
+        console.print(
+            "[yellow]this adopted stack's files would be edited; add --yes to confirm "
+            "(DEVELOPMENT.md §6.7)[/yellow]"
+        )
+        return
+    try:
+        notes = apply_steps(plan.steps)
+    except OdooInstallerError as exc:
+        error(str(exc))
+        raise typer.Exit(code=1) from None
+    render_results(plan.steps, notes)
+    if manifest.adopted:
+        console.print(
+            "[yellow]adopted stack: restart it with your own tooling "
+            "(e.g. ./restart.sh) to apply the new mount — the CLI did not touch "
+            "the running containers[/yellow]"
+        )
+    else:
+        console.print(f"[green]✔[/green] {plan.repo} added")
+
+
+@app.command("list")
+def list_modules(
+    *,
+    instance: Annotated[str | None, typer.Option("--instance", help=_INSTANCE_HELP)] = None,
+    db: Annotated[
+        str | None, typer.Option("--db", help="Show install state from this database.")
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="Print machine-readable JSON.")] = False,
+) -> None:
+    """List modules visible to the instance (local addons + mounted OCA repos)."""
+    container = deps.build()
+    try:
+        manifest = resolve_instance(container, instance)
+        rows: list[dict[str, str]] = []
+        for module, source in sorted(available_modules(container.fs, manifest).items()):
+            record = next((r for r in manifest.repos if r.repo == source), None)
+            rows.append(
+                {
+                    "module": module,
+                    "source": source,
+                    "commit": record.commit[:8] if record else "",
+                    "state": "",
+                }
+            )
+        if db is not None:
+            states = module_states(
+                container.docker,
+                manifest.dir,
+                manifest.db_service,
+                manifest.db_user,
+                db,
+                [row["module"] for row in rows],
+            )
+            for row in rows:
+                row["state"] = states.get(row["module"], "not in db")
+    except OdooInstallerError as exc:
+        error(str(exc))
+        raise typer.Exit(code=1) from None
+    if as_json:
+        typer.echo(json.dumps(rows, indent=2))
+        return
+    if not rows:
+        console.print("no modules found (add an OCA repo first)")
+        return
+    render_module_rows(rows, db)
+
+
+@app.command("search")
+def search(
+    query: Annotated[str, typer.Argument(help="Search term(s) within the OCA GitHub org.")],
+    *,
+    limit: Annotated[int, typer.Option("--limit", help="Maximum results.")] = 10,
+) -> None:
+    """Search OCA repositories on GitHub."""
+    container = deps.build()
+    try:
+        results = container.github.search_repos(query, limit=limit)
+    except OdooInstallerError as exc:
+        error(str(exc))
+        raise typer.Exit(code=1) from None
+    if not results:
+        console.print("no repositories matched")
+        return
+    render_search_results(query, results)
+
+
+def _run_modules(
+    modules: list[str],
+    *,
+    db: str,
+    instance: str | None,
+    upgrade: bool,
+) -> None:
+    container = deps.build()
+    try:
+        manifest = resolve_instance(container, instance)
+        available = available_modules(container.fs, manifest)
+        missing = [m for m in modules if m not in available]
+        if missing:
+            raise OdooInstallerError(
+                f"modules not visible to this instance: {', '.join(missing)}; "
+                "run 'module add' first"
+            )
+        output = install_modules(
+            container.docker,
+            manifest.dir,
+            manifest.web_service,
+            db,
+            modules,
+            upgrade=upgrade,
+        )
+        states = module_states(
+            container.docker,
+            manifest.dir,
+            manifest.db_service,
+            manifest.db_user,
+            db,
+            modules,
+        )
+    except OdooInstallerError as exc:
+        error(str(exc))
+        raise typer.Exit(code=1) from None
+    tail = "\n".join(output.splitlines()[-12:])
+    if tail.strip():
+        console.print(f"[dim]{tail}[/dim]")
+    rows = [{"module": m, "state": states.get(m, "not in db")} for m in modules]
+    render_module_rows(rows, db)
+    verb = "upgraded" if upgrade else "installed"
+    bad = [m for m in modules if states.get(m) != "installed"]
+    if bad:
+        error(f"modules not in 'installed' state: {', '.join(bad)}")
+        raise typer.Exit(code=1)
+    console.print(f"[green]✔[/green] {verb}: {', '.join(modules)}")
+
+
+@app.command("install")
+def install(
+    modules: Annotated[list[str], typer.Argument(help="Module names.")],
+    *,
+    db: Annotated[str, typer.Option("--db", help=_DB_HELP)],
+    instance: Annotated[str | None, typer.Option("--instance", help=_INSTANCE_HELP)] = None,
+) -> None:
+    """Install modules into an explicit database (odoo -i, scratch DBs recommended)."""
+    _run_modules(modules, db=db, instance=instance, upgrade=False)
+
+
+@app.command("upgrade")
+def upgrade(
+    modules: Annotated[list[str], typer.Argument(help="Module names.")],
+    *,
+    db: Annotated[str, typer.Option("--db", help=_DB_HELP)],
+    instance: Annotated[str | None, typer.Option("--instance", help=_INSTANCE_HELP)] = None,
+) -> None:
+    """Upgrade modules in an explicit database (odoo -u)."""
+    _run_modules(modules, db=db, instance=instance, upgrade=True)
+
+
+@app.command("remove")
+def remove(
+    repo: Annotated[str, typer.Argument(help="Repo to unmount, e.g. 'server-utils'.")],
+    *,
+    db: Annotated[
+        str | None,
+        typer.Option("--db", help="Also reset the repo's modules to 'uninstalled' in this db."),
+    ] = None,
+    purge_repo: Annotated[
+        bool, typer.Option("--purge-repo", help="Also delete the odoo-installer clone.")
+    ] = False,
+    instance: Annotated[str | None, typer.Option("--instance", help=_INSTANCE_HELP)] = None,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", help="Explicit confirmation for file edits on ADOPTED stacks."),
+    ] = False,
+    apply_changes: Annotated[bool, typer.Option("--apply", help=_APPLY_HELP)] = False,
+) -> None:
+    """Remove a repo from the instance: unmount, forget, optionally purge."""
+    container = deps.build()
+    try:
+        manifest = resolve_instance(container, instance)
+        plan = module_remove_plan(
+            config=container.config,
+            manifest=manifest,
+            repo_arg=repo,
+            purge_repo=purge_repo,
+            db_opt=db,
+            dbms_execute_sql=execute_sql,
+            git=container.git,
+            fs=container.fs,
+            docker=container.docker,
+        )
+    except OdooInstallerError as exc:
+        error(str(exc))
+        raise typer.Exit(code=1) from None
+    if not apply_changes:
+        render_plan(plan.steps, f"Module remove plan: {plan.repo}")
+        return
+    if manifest.adopted and not yes:
+        console.print("[yellow]add --yes to confirm edits on this adopted stack[/yellow]")
+        return
+    try:
+        notes = apply_steps(plan.steps)
+    except OdooInstallerError as exc:
+        error(str(exc))
+        raise typer.Exit(code=1) from None
+    render_results(plan.steps, notes)
+    console.print(f"[green]✔[/green] {plan.repo} removed")

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from odoo_installer.adapters.docker import DockerAdapter
 from odoo_installer.adapters.filesystem import FileSystemAdapter
+from odoo_installer.adapters.git import GitAdapter
 from odoo_installer.adapters.github import GitHubAdapter
 from odoo_installer.adapters.system import SystemAdapter
 from odoo_installer.config import (
@@ -29,6 +30,7 @@ class Container:
     config_path: Path
     registry_path: Path
     docker: DockerAdapter
+    git: GitAdapter
     system: SystemAdapter
     github: GitHubAdapter
     fs: FileSystemAdapter
@@ -42,6 +44,7 @@ def build(config_path: Path | None = None) -> Container:
         config_path=path,
         registry_path=default_registry_path(),
         docker=DockerAdapter(),
+        git=GitAdapter(),
         system=SystemAdapter(),
         github=GitHubAdapter(token_env=config.github_token_env),
         fs=FileSystemAdapter(),

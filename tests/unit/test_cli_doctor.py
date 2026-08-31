@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
-from fakes import FakeDocker, FakeFs, FakeGitHub, FakeSystem, GitHubDown
+from fakes import FakeDocker, FakeFs, FakeGit, FakeGitHub, FakeSystem, GitHubDown
 from typer.testing import CliRunner
 
 from odoo_installer.cli.deps import Container
@@ -29,6 +29,7 @@ def make_container(
         config=GlobalConfig(instances_root=tmp_path / "instances"),
         config_path=tmp_path / "config.toml",
         registry_path=tmp_path / "registry.toml",
+        git=FakeGit(),
         docker=docker or FakeDocker(),
         system=system or FakeSystem(),
         github=github or FakeGitHub(),

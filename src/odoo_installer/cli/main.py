@@ -16,6 +16,7 @@ from odoo_installer.cli import db as db_cli
 from odoo_installer.cli import doctor as doctor_cli
 from odoo_installer.cli import install as install_cli
 from odoo_installer.cli import instance as instance_cli
+from odoo_installer.cli import module as module_cli
 from odoo_installer.constants import APP_NAME
 
 
@@ -34,6 +35,7 @@ app = typer.Typer(
 app.add_typer(config_cli.app, name="config")
 app.add_typer(db_cli.app, name="db")
 app.add_typer(instance_cli.app, name="instance")
+app.add_typer(module_cli.app, name="module")
 app.command(name="doctor")(doctor_cli.doctor)
 app.command(name="install")(install_cli.install)
 
