@@ -94,6 +94,16 @@ markers = [
 [tool.coverage.run]
 source = ["src/odoo_installer"]
 branch = true
+# docker/git/github/system adapters are thin subprocess/network wrappers with no
+# unit-testable logic (core logic is tested through the fake adapters); they are
+# exercised against the live stack instead. The filesystem adapter is pure local
+# I/O and IS unit-tested (tests/unit/test_filesystem.py).
+omit = [
+    "src/odoo_installer/adapters/docker.py",
+    "src/odoo_installer/adapters/git.py",
+    "src/odoo_installer/adapters/github.py",
+    "src/odoo_installer/adapters/system.py",
+]
 
 [tool.coverage.report]
 show_missing = true

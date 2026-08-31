@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from typer.testing import CliRunner
 
 from odoo_installer import __version__
+from odoo_installer.cli import deps
 from odoo_installer.cli.main import app
 from odoo_installer.constants import APP_NAME
+from odoo_installer.schemas import GlobalConfig
 
 runner = CliRunner()
 
@@ -35,3 +39,9 @@ def test_help_lists_version_flag() -> None:
     assert result.exit_code == 0
     assert "--version" in result.output
     assert "version" in result.output  # the version subcommand
+
+
+def test_deps_build_with_explicit_config_path(tmp_path: Path) -> None:
+    container = deps.build(config_path=tmp_path / "config.toml")
+    assert container.config_path == tmp_path / "config.toml"
+    assert container.config == GlobalConfig()  # missing file means defaults

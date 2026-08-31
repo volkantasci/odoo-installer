@@ -118,11 +118,24 @@ def test_suite_failure_exit_3_and_kinds(patch_deps, tmp_path: Path) -> None:
     assert "FAIL" in result.output
     json_path = tmp_path / "fail.json"
     container.docker.compose_result_results = [(1, "FAIL: test_check_failed")]
-    result2 = runner.invoke(app, ["test", "suite", "--output", str(json_path)])
+    result2 = runner.invoke(
+        app,
+        [
+            "test",
+            "suite",
+            "--output",
+            str(json_path),
+            "--output",
+            str(tmp_path / "fail.md"),
+        ],
+    )
     assert result2.exit_code == 3
     payload = json.loads(json_path.read_text(encoding="utf-8"))
     assert payload["failed"] == 1
     assert "test_failure" in payload["results"][0]["kinds"]
+    md = (tmp_path / "fail.md").read_text(encoding="utf-8")
+    assert "## Failures" in md
+    assert f"### {MODULE} (exit 1)" in md
 
 
 def test_suite_keep_db_skips_post_drop(patch_deps, tmp_path: Path) -> None:

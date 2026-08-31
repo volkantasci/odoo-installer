@@ -11,6 +11,7 @@ from odoo_installer.core.dbms import (
     create_database,
     drop_database_plan,
     list_databases,
+    module_states,
     reset_database_plan,
     validate_db_name,
 )
@@ -82,3 +83,14 @@ def test_reset_plan_adds_create() -> None:
     apply_steps(steps)
     sqls = recorded_sql(docker)
     assert 'CREATE DATABASE "scratch"' in sqls[2]
+
+
+def test_module_states_rejects_invalid_names() -> None:
+    with pytest.raises(StackError, match="invalid module name"):
+        module_states(FakeDocker(), STACK, "db", "odoo", "d", ["bad;name"])
+
+
+def test_module_states_skips_blank_lines_and_returns_empty_for_no_names() -> None:
+    docker = FakeDocker(compose_results=["\nfoo|installed\n\n"])
+    assert module_states(docker, STACK, "db", "odoo", "d", ["foo"]) == {"foo": "installed"}
+    assert module_states(FakeDocker(), STACK, "db", "odoo", "d", []) == {}

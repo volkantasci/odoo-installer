@@ -115,3 +115,64 @@ def test_tested_registry_roundtrip(tmp_path: Path) -> None:
     assert set(config_mod.load_tested_registry(path).modules) == {"web_responsive", "second"}
     assert config_mod.get_tested_module("web_responsive", path=path) is not None
     assert config_mod.get_tested_module("nope", path=path) is None
+
+
+def test_tested_registry_corrupt_toml_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "tested.toml"
+    path.write_text("modules = [broken", encoding="utf-8")
+    with pytest.raises(ConfigError):
+        config_mod.load_tested_registry(path)
+
+
+def test_tested_registry_invalid_shape_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "tested.toml"
+    path.write_text('modules = { x = { name = "x" } }', encoding="utf-8")
+    with pytest.raises(ConfigError):
+        config_mod.load_tested_registry(path)
+
+
+def test_registry_corrupt_toml_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "registry.toml"
+    path.write_text("instances = [broken", encoding="utf-8")
+    with pytest.raises(ConfigError):
+        config_mod.load_registry(path)
+
+
+def test_registry_invalid_shape_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "registry.toml"
+    path.write_text("instances = { dev = {} }", encoding="utf-8")
+    with pytest.raises(ConfigError):
+        config_mod.load_registry(path)
+
+
+def test_atomic_write_fails_when_parent_is_a_file(tmp_path: Path) -> None:
+    blocker = tmp_path / "blocker"
+    blocker.write_text("x", encoding="utf-8")
+    with pytest.raises(ConfigError):
+        config_mod.save_registry(Registry(), blocker / "registry.toml")
+
+
+def test_default_paths_follow_xdg_config_home(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    base = tmp_path / "cfg" / "odoo-installer"
+    assert config_mod.default_config_path() == base / "config.toml"
+    assert config_mod.default_registry_path() == base / "registry.toml"
+    assert config_mod.default_tested_path() == base / "tested.toml"
+
+
+def test_instance_logs_dir_adopted_uses_xdg_state(monkeypatch, tmp_path: Path) -> None:
+    from odoo_installer.schemas import InstanceManifest
+
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    manifest = InstanceManifest(
+        name="stack",
+        dir=tmp_path / "stack",
+        odoo_version="19.0",
+        image="odoo:19",
+        pg_tag=17,
+        http_port=8069,
+        adopted=True,
+    )
+    logs = config_mod.instance_logs_dir(manifest)
+    assert str(tmp_path / "state") in str(logs)
+    assert logs.name == "stack"

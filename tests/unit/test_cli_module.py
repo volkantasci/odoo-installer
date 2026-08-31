@@ -272,3 +272,33 @@ def test_module_remove_unmounts_and_resets_states(patch_deps, tmp_path: Path) ->
     compose = (tmp_path / "instances" / "dev" / "docker-compose.yml").read_text(encoding="utf-8")
     assert "oca-server-utils" not in compose
     assert ("restart", "web") in [args for args, _ in container.docker.compose_calls]
+
+
+def test_module_test_pass_records_whitelist(patch_deps, tmp_path: Path) -> None:
+    import tomllib
+
+    _, _ = prepared_instance(tmp_path, patch_deps)
+    runner.invoke(app, ["module", "add", "server-utils", "--apply"])
+    result = runner.invoke(app, ["module", "test", "server_util_foo"])
+    assert result.exit_code == 0, result.output
+    assert "recorded as tested" in result.output
+    data = tomllib.loads((tmp_path / "tested.toml").read_text(encoding="utf-8"))
+    assert data["modules"]["server_util_foo"]["repo"] == "OCA/server-utils"
+
+
+def test_module_test_failure_exits_3(patch_deps, tmp_path: Path) -> None:
+    container, _ = prepared_instance(tmp_path, patch_deps)
+    runner.invoke(app, ["module", "add", "server-utils", "--apply"])
+    container.docker.compose_result_results = [(1, "FAIL: check_broke")]
+    result = runner.invoke(app, ["module", "test", "server_util_foo"])
+    assert result.exit_code == 3, result.output
+    assert "FAIL" in result.output
+    # nothing whitelisted on failure
+    assert not (tmp_path / "tested.toml").exists()
+
+
+def test_module_test_invisible_module_exits_1(patch_deps, tmp_path: Path) -> None:
+    _, _ = prepared_instance(tmp_path, patch_deps)
+    result = runner.invoke(app, ["module", "test", "ghost_module"])
+    assert result.exit_code == 1, result.output
+    assert "not visible" in result.output
