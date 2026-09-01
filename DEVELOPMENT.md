@@ -163,6 +163,7 @@ src/odoo_installer/
 ├── templates/             # docker-compose.yml.j2, odoo.conf.j2, .env.j2 (jinja2)
 └── py.typed
 tests/
+├── conftest.py            # normalizes TERM/NO_COLOR/FORCE_COLOR so rich output stays plain text in assertions
 └── unit/                  # fakes only, offline, < 5 s
     └── fakes.py           # FakeDocker, FakeGit, FakeGitHub, FakeSystem, FakeFs
 
