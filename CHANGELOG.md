@@ -21,6 +21,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any machine (test PASSes or `module approve`) spread to every machine that pulls;
   the CLI itself does not need updating for new approvals, only the repo does.
 
+## [0.5.0] - 2026-09-01
+
+### Added
+
+- **OCA dependency resolver.** `module install`/`upgrade` now read each target
+  module's `__manifest__.py` dependencies. Dependencies provided by Odoo core are
+  verified by listing the web container's core addons dir and never block; deps
+  provided by already-mounted repos just work; a dependency whose provider repo is
+  NOT mounted is refused with a clear message naming the provider — pass
+  `--resolve-deps` to mount the provider repos automatically (sparse, via the same
+  plan-first machinery) and include the dependencies in the install.
+- **Whitelist records now carry dependency info:** `module test` and `module approve`
+  store each module's OCA dependencies in tested.toml (`deps` field), so the central
+  whitelist repo doubles as a module→repo/dependency catalog that the resolver
+  queries — approvals made anywhere teach every machine how to install dependents.
+
 ## [0.3.2] - 2026-09-01
 
 ### Fixed
