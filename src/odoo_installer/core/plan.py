@@ -21,17 +21,34 @@ class Step:
     already_satisfied: bool = False
 
 
-def apply_steps(steps: list[Step]) -> list[str]:
-    """Execute steps in order; abort on the first failure. Returns result notes."""
+StepReporter = Callable[[int, int, "Step", str | None], None]
+"""Progress hook: called with (index, total, step, note=None) before a step runs and
+with (index, total, step, note) after it finished (note = its result or
+"already satisfied")."""
+
+
+def apply_steps(steps: list[Step], on_step: StepReporter | None = None) -> list[str]:
+    """Execute steps in order; abort on the first failure. Returns result notes.
+
+    When `on_step` is given it is called before each step runs (note=None) and again
+    after it finished (with its note), so the CLI can stream live [i/n] progress
+    instead of reporting everything only at the end.
+    """
     notes: list[str] = []
-    for step in steps:
+    total = len(steps)
+    for index, step in enumerate(steps, start=1):
+        if on_step is not None:
+            on_step(index, total, step, None)
         if step.already_satisfied:
-            notes.append("already satisfied")
-            continue
-        try:
-            notes.append(step.run())
-        except OdooInstallerError:
-            raise
-        except Exception as exc:
-            raise OdooInstallerError(f"step failed: {step.description}: {exc}") from exc
+            note = "already satisfied"
+        else:
+            try:
+                note = step.run()
+            except OdooInstallerError:
+                raise
+            except Exception as exc:
+                raise OdooInstallerError(f"step failed: {step.description}: {exc}") from exc
+        notes.append(note)
+        if on_step is not None:
+            on_step(index, total, step, note)
     return notes

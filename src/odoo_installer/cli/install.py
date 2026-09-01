@@ -7,7 +7,7 @@ from typing import Annotated
 import typer
 
 from odoo_installer.cli import deps
-from odoo_installer.console import console, error, render_plan, render_results
+from odoo_installer.console import console, error, progress_reporter, render_plan
 from odoo_installer.core.plan import apply_steps
 from odoo_installer.core.prereqs import host_install_plan
 from odoo_installer.exceptions import OdooInstallerError
@@ -38,8 +38,8 @@ def install(
         render_plan(steps, "Host prerequisite install plan")
         return
     try:
-        notes = apply_steps(steps)
+        apply_steps(steps, on_step=progress_reporter())
     except OdooInstallerError as exc:
         error(str(exc))
         raise typer.Exit(code=1) from None
-    render_results(steps, notes)
+    console.print("[green]✔[/green] host prerequisites installed")

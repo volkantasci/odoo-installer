@@ -304,6 +304,8 @@ The tool must behave exactly like the documented OCA workflow:
 - **Plan-first:** `install`, `instance create/remove`, `module add/remove`,
   `db drop/reset`, and any host package operation print a numbered plan of the exact
   commands and file writes, then require `--apply` (or `--yes` for prompts) to execute.
+  Applied plans stream live progress: each step is announced `[i/n] description`
+  before it runs and its result note follows immediately.
 - **Idempotency:** every step checks current state first (package installed? repo already
   cloned at right commit? addons_path already contains the entry?) and reports
   `already satisfied` instead of redoing work. Re-running a completed install is a no-op.

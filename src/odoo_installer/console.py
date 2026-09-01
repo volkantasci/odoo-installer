@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from rich.console import Console
 from rich.table import Table
@@ -55,10 +55,21 @@ def render_plan(steps: Sequence[Step], title: str) -> None:
     console.print("[dim]dry run — re-run with --apply to execute[/dim]")
 
 
-def render_results(steps: Sequence[Step], notes: Sequence[str]) -> None:
-    """Render applied plan step results."""
-    for step, note in zip(steps, notes, strict=True):
-        console.print(f"[green]✔[/green] {step.description} — {note}")
+def progress_reporter() -> Callable[[int, int, Step, str | None], None]:
+    """Build a live progress hook for `apply_steps`.
+
+    Before a step runs it prints `[i/total] description`; after it finishes it prints
+    the result note (`✔ already satisfied` included), so long plans stream their
+    progress instead of reporting only at the end.
+    """
+
+    def report(index: int, total: int, step: Step, note: str | None) -> None:
+        if note is None:
+            console.print(f"[bold]\\[{index}/{total}][/bold] {step.description}")
+        else:
+            console.print(f"  [green]✔[/green] {note}")
+
+    return report
 
 
 def render_registry(entries: Sequence[RegistryEntry]) -> None:

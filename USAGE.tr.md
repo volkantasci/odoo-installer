@@ -102,7 +102,21 @@ Bir şeyi değiştiren komutlar (`install`, `instance create/remove`, `module ad
 `db drop/reset`) tam komut ve dosya yazma listesini numaralı bir plan olarak yazdırır ve
 `--apply` verene kadar **hiçbir şey uygulamadan** 0 koduyla çıkar. Yıkıcı işlemler
 ayrıca `--yes` ister. Yazdırılan plan, uygulanan kod yoluyla birebir aynıdır — dry-run
-tasarım gereği kusursuzdur.
+tasarım gereği kusursuzdur. Plan uygulandığında her adım canlı olarak
+`[i/n] açıklama` biçiminde ve ardından sonucuyla duyurulur; hangi aşamada olduğunuz her
+zaman görünür:
+
+```console
+$ odoo-installer instance create dev --apply
+[1/8] instance dizinini oluştur
+  ✔ oluşturuldu
+[2/8] docker-compose.yml üret
+  ✔ yazıldı
+...
+[8/8] stack'i başlat (docker compose up -d) ve /web/health'i bekle
+  ✔ sağlıklı
+✔ instance 'dev' hazır: http://localhost:8069
+```
 
 ### 3.3 Sahiplenilen (adopted) stack'ler
 

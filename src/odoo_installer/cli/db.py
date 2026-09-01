@@ -14,7 +14,7 @@ import typer
 
 from odoo_installer.cli import deps
 from odoo_installer.cli.common import resolve_instance
-from odoo_installer.console import console, error, render_databases, render_plan, render_results
+from odoo_installer.console import console, error, progress_reporter, render_databases, render_plan
 from odoo_installer.core.dbms import (
     create_database,
     drop_database_plan,
@@ -97,11 +97,10 @@ def drop_db(
             console.print("[yellow]add --yes to confirm the drop[/yellow]")
         return
     try:
-        notes = apply_steps(steps)
+        apply_steps(steps, on_step=progress_reporter())
     except OdooInstallerError as exc:
         error(str(exc))
         raise typer.Exit(code=1) from None
-    render_results(steps, notes)
     console.print(f"[green]✔[/green] database {db_name!r} dropped")
 
 
@@ -132,9 +131,8 @@ def reset_db(
             console.print("[yellow]add --yes to confirm the reset[/yellow]")
         return
     try:
-        notes = apply_steps(steps)
+        apply_steps(steps, on_step=progress_reporter())
     except OdooInstallerError as exc:
         error(str(exc))
         raise typer.Exit(code=1) from None
-    render_results(steps, notes)
     console.print(f"[green]✔[/green] database {db_name!r} reset (empty)")

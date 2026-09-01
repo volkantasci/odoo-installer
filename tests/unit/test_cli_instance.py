@@ -61,6 +61,15 @@ def test_create_apply_creates_and_starts_stack(patch_deps, tmp_path: Path) -> No
     assert container.docker.compose_calls[0][0] == ("up", "-d")
     assert container.docker.health_checks == ["dev-web-1"]
     assert "ready at http://localhost:8069" in result.output
+    # live progress: every step is announced as [i/n] before it runs
+    assert "[1/" in result.output
+    counts = [
+        int(line.split("[")[1].split("/")[0])
+        for line in result.output.splitlines()
+        if line.startswith("[")
+    ]
+    total = max(counts)
+    assert f"[{total}/" in result.output
 
 
 def test_create_apply_reruns_are_idempotent(patch_deps, tmp_path: Path) -> None:

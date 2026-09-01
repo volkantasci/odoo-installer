@@ -100,7 +100,20 @@ Commands that change anything (`install`, `instance create/remove`, `module add/
 `db drop/reset`) print a numbered plan of the exact commands and file writes and exit 0
 **without executing anything** until you add `--apply`. Destructive operations
 additionally require `--yes`. The printed plan *is* the executed code path — dry-run is
-exact by construction.
+exact by construction. When a plan is applied, every step is announced live as
+`[i/n] description` followed by its result, so you always know which stage is running:
+
+```console
+$ odoo-installer instance create dev --apply
+[1/8] create the instance directory
+  ✔ created
+[2/8] render docker-compose.yml
+  ✔ written
+...
+[8/8] start the stack (docker compose up -d) and wait for /web/health
+  ✔ healthy
+✔ instance 'dev' ready at http://localhost:8069
+```
 
 ### 3.3 Adopted stacks
 

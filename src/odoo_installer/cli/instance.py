@@ -9,7 +9,7 @@ import typer
 
 from odoo_installer.cli import deps
 from odoo_installer.config import load_registry
-from odoo_installer.console import console, error, render_plan, render_registry, render_results
+from odoo_installer.console import console, error, progress_reporter, render_plan, render_registry
 from odoo_installer.constants import DEFAULT_ODOO_IMAGE
 from odoo_installer.core.instances import (
     adopt_instance_plan,
@@ -86,11 +86,10 @@ def create(
         render_plan(plan.steps, f"Instance create plan: {plan.name} (http port {plan.http_port})")
         return
     try:
-        notes = apply_steps(plan.steps)
+        apply_steps(plan.steps, on_step=progress_reporter())
     except OdooInstallerError as exc:
         error(str(exc))
         raise typer.Exit(code=1) from None
-    render_results(plan.steps, notes)
     console.print(
         f"[green]✔[/green] instance {plan.name!r} ready at http://localhost:{plan.http_port}"
     )
@@ -186,11 +185,10 @@ def remove(
             console.print("[yellow]add --yes to confirm the removal[/yellow]")
         return
     try:
-        notes = apply_steps(steps)
+        apply_steps(steps, on_step=progress_reporter())
     except OdooInstallerError as exc:
         error(str(exc))
         raise typer.Exit(code=1) from None
-    render_results(steps, notes)
     console.print(f"[green]✔[/green] instance {name!r} removed")
 
 
@@ -286,9 +284,8 @@ def adopt(
         render_plan(plan.steps, f"Instance adopt plan: {plan.name}")
         return
     try:
-        notes = apply_steps(plan.steps)
+        apply_steps(plan.steps, on_step=progress_reporter())
     except OdooInstallerError as exc:
         error(str(exc))
         raise typer.Exit(code=1) from None
-    render_results(plan.steps, notes)
     console.print(f"[green]✔[/green] instance {plan.name!r} adopted (read-mostly)")

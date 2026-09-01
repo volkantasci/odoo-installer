@@ -24,9 +24,9 @@ from odoo_installer.config import (
 from odoo_installer.console import (
     console,
     error,
+    progress_reporter,
     render_module_rows,
     render_plan,
-    render_results,
     render_search_results,
     render_test_outcome,
 )
@@ -117,11 +117,10 @@ def add(
         )
         return
     try:
-        notes = apply_steps(plan.steps)
+        apply_steps(plan.steps, on_step=progress_reporter())
     except OdooInstallerError as exc:
         error(str(exc))
         raise typer.Exit(code=1) from None
-    render_results(plan.steps, notes)
     if manifest.adopted:
         console.print(
             "[yellow]adopted stack: restart it with your own tooling "
@@ -338,11 +337,10 @@ def remove(
         console.print("[yellow]add --yes to confirm edits on this adopted stack[/yellow]")
         return
     try:
-        notes = apply_steps(plan.steps)
+        apply_steps(plan.steps, on_step=progress_reporter())
     except OdooInstallerError as exc:
         error(str(exc))
         raise typer.Exit(code=1) from None
-    render_results(plan.steps, notes)
     console.print(f"[green]✔[/green] {plan.repo} removed")
 
 
