@@ -19,7 +19,7 @@ Detailed usage guide: [USAGE.md](USAGE.md) (English) · [USAGE.tr.md](USAGE.tr.m
 ## Installation
 
 ```bash
-pip install odoo-installer            # from PyPI (0.1.1+)
+pip install odoo-installer            # from PyPI (0.2.0+)
 # or from a checkout:
 pip install .
 ```

@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-09-01
+
+### Added
+
+- `instance remove` now also removes **adopted** stacks (previously refused): it tears
+  the stack down with its own compose file, deletes the stack directory and
+  unregisters the instance. The only explicitly confirmed (`--apply --yes`) mutating
+  action allowed on read-mostly adopted stacks.
+- `--remove-data` on `instance remove` now destroys the **named volumes declared in
+  the stack's compose file** (`docker compose down -v`) — not just the CLI-created
+  pgdata volume — so adopted stacks can be fully decommissioned by the CLI.
+
+### Changed
+
+- Documentation: detailed usage guides added in English (`USAGE.md`) and Turkish
+  (`USAGE.tr.md`), shipped in the sdist; troubleshooting entries for master-password
+  lookup (the official odoo image passes no master password via env; the database
+  manager form is never pre-filled server-side) and shared-port pitfalls; stale
+  live-stack references replaced with generic examples.
+
 ## [0.1.1] - 2026-09-01
 
 ### Fixed
