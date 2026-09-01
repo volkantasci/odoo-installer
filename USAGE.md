@@ -62,9 +62,9 @@ For an isolated daily-use install (recommended over mixing with a dev venv):
 pipx install odoo-installer           # or: uv tool install odoo-installer
 ```
 
-Enable shell completion (bash/zsh/fish): `odoo-installer --install-completion`.
+Enable shell completion (bash/zsh/fish): `oii --install-completion`.
 
-The CLI answers to three names: `odoo-installer`, `oii` and `python -m odoo_installer`.
+The CLI answers to three names: `oii`, `odoo-installer` and `python -m odoo_installer` — every example in this guide uses the short alias.
 
 > 💡 **Upgrading:** `pip install -U odoo-installer` (or `pipx upgrade
 > odoo-installer`). If pip claims "already satisfied" right after a release, pin the
@@ -103,7 +103,7 @@ confirmations). The printed plan *is* the executed code path. When a plan runs, 
 step is announced as it happens:
 
 ```console
-$ odoo-installer instance create dev --apply
+$ oii instance create dev --apply
 [1/8] create the instance directory
   ✔ created
 [2/8] render docker-compose.yml
@@ -148,7 +148,7 @@ Global: `--version` / `-V`, `--help` everywhere, plus a `version` command.
 ### 4.1 `doctor` — host diagnostics
 
 ```bash
-odoo-installer doctor [--json]
+oii doctor [--json]
 ```
 
 Checks docker engine, compose plugin, docker group membership, git, disk space at the
@@ -158,7 +158,7 @@ reachability. Exits **4** when a critical check fails.
 ### 4.2 `install` — host prerequisites
 
 ```bash
-odoo-installer install [--apply]
+oii install [--apply]
 ```
 
 Installs docker engine, the compose plugin and git via pacman (Arch) or apt
@@ -167,10 +167,10 @@ Installs docker engine, the compose plugin and git via pacman (Arch) or apt
 ### 4.3 `config` — global configuration
 
 ```bash
-odoo-installer config show [--json]
-odoo-installer config set <key> <value>
-odoo-installer config edit          # $VISUAL/$EDITOR, validated before saving
-odoo-installer config path
+oii config show [--json]
+oii config set <key> <value>
+oii config edit          # $VISUAL/$EDITOR, validated before saving
+oii config path
 ```
 
 | Key | Default | Meaning |
@@ -190,7 +190,7 @@ saves nothing when invalid.
 #### Create
 
 ```bash
-odoo-installer instance create <name> [--dir PATH] [--http-port N] [--image TAG]
+oii instance create <name> [--dir PATH] [--http-port N] [--image TAG]
                             [--pg-tag N] [--apply]
 ```
 
@@ -206,10 +206,10 @@ Renders the stack, starts it, waits for `/web/health`, registers the instance.
 #### List / show / secret / lifecycle
 
 ```bash
-odoo-installer instance list
-odoo-installer instance show <name>
-odoo-installer instance secret <name> [--key KEY]
-odoo-installer instance start|stop|restart <name>
+oii instance list
+oii instance show <name>
+oii instance secret <name> [--key KEY]
+oii instance start|stop|restart <name>
 ```
 
 `secret` prints one value from the instance's `.env` on its own line (default:
@@ -219,7 +219,7 @@ are a hard error listing the available keys.
 #### Remove
 
 ```bash
-odoo-installer instance remove <name> [--remove-data] [--yes] [--apply]
+oii instance remove <name> [--remove-data] [--yes] [--apply]
 ```
 
 Dry-run by default; executes only with `--apply --yes`. Volumes are **kept** unless
@@ -230,16 +230,16 @@ allowed on them.
 #### Adopt an existing stack
 
 ```bash
-odoo-installer instance adopt <dir> [--name NAME] [--db-user odoo] [--apply]
+oii instance adopt <dir> [--name NAME] [--db-user odoo] [--apply]
 ```
 
 ### 4.5 `db` — databases
 
 ```bash
-odoo-installer db list [--instance NAME]
-odoo-installer db create <db> [--instance NAME]           # idempotent
-odoo-installer db drop <db> [--instance NAME] [--yes] [--apply]
-odoo-installer db reset <db> [--instance NAME] [--yes] [--apply]
+oii db list [--instance NAME]
+oii db create <db> [--instance NAME]           # idempotent
+oii db drop <db> [--instance NAME] [--yes] [--apply]
+oii db reset <db> [--instance NAME] [--yes] [--apply]
 ```
 
 Executed through psql in the instance's `db` container. Database names are always
@@ -251,7 +251,7 @@ explicit; `postgres`/`template0`/`template1` are refused; `drop`/`reset` need
 #### Add a repo
 
 ```bash
-odoo-installer module add <oca-repo> [--modules m1,m2] [--sparse] [--repo PATH]
+oii module add <oca-repo> [--modules m1,m2] [--sparse] [--repo PATH]
                          [--fork USER] [--instance NAME] [--yes] [--apply]
 ```
 
@@ -262,7 +262,7 @@ odoo-installer module add <oca-repo> [--modules m1,m2] [--sparse] [--repo PATH]
   their dependencies**, classified from GitHub raw manifests:
 
   ```console
-  $ odoo-installer module add web --sparse --modules web_responsive
+  $ oii module add web --sparse --modules web_responsive
   ...
   3. → verify dependencies of web_responsive
        (core: base, web, mail, web_tour · already available: —)
@@ -289,16 +289,16 @@ odoo-installer module add <oca-repo> [--modules m1,m2] [--sparse] [--repo PATH]
 #### List / search
 
 ```bash
-odoo-installer module list [--instance NAME] [--db DB] [--json]
-odoo-installer module search <query> [--limit N]
+oii module list [--instance NAME] [--db DB] [--json]
+oii module search <query> [--limit N]
 ```
 
 #### Install / upgrade
 
 ```bash
-odoo-installer module install <name...> --db DB [--instance NAME]
+oii module install <name...> --db DB [--instance NAME]
                             [--allow-untested] [--resolve-deps]
-odoo-installer module upgrade <name...> --db DB [--instance NAME]
+oii module upgrade <name...> --db DB [--instance NAME]
                             [--allow-untested] [--resolve-deps]
 ```
 
@@ -320,7 +320,7 @@ reads each target's `__manifest__.py`:
 #### Remove
 
 ```bash
-odoo-installer module remove <repo> [--db DB] [--purge-repo] [--instance NAME]
+oii module remove <repo> [--db DB] [--purge-repo] [--instance NAME]
                              [--yes] [--apply]
 ```
 
@@ -330,7 +330,7 @@ Unmounts, rewrites `addons_path`; `--db` resets the repo's modules to `uninstall
 #### Test one module
 
 ```bash
-odoo-installer module test <name> [--instance NAME] [--keep-db]
+oii module test <name> [--instance NAME] [--keep-db]
 ```
 
 Installs on a scratch DB, runs `--test-enable --test-tags=/<name>`, captures the log,
@@ -340,7 +340,7 @@ whitelist.
 #### Approve already-proven modules
 
 ```bash
-odoo-installer module approve <name...> --db DB [--instance NAME]
+oii module approve <name...> --db DB [--instance NAME]
 ```
 
 For modules whose quality is already proven on a running stack: refuses anything not
@@ -350,9 +350,9 @@ log required.
 ### 4.7 `test` — batch testing and central sync
 
 ```bash
-odoo-installer test suite [--instance NAME] [--only REPO] [--modules m1,m2]
+oii test suite [--instance NAME] [--only REPO] [--modules m1,m2]
                           [--output report.md] [--output report.json] [--keep-db]
-odoo-installer test pull [--apply]
+oii test pull [--apply]
 ```
 
 `suite` tests every module on the addons_path sequentially (fresh `oitest_<module>`
@@ -392,43 +392,43 @@ GitHub tokens: read from the env var named by `github_token_env` (default
 ### 6.1 Bootstrap a machine
 
 ```bash
-odoo-installer doctor && odoo-installer install --apply && odoo-installer doctor
+oii doctor && oii install --apply && oii doctor
 ```
 
 ### 6.2 Fresh dev instance with an OCA module
 
 ```bash
-odoo-installer instance create dev --apply
-odoo-installer db create odoo --instance dev
-odoo-installer module add web --sparse --modules web_responsive --apply
-odoo-installer module test web_responsive
-odoo-installer module install web_responsive --db odoo
+oii instance create dev --apply
+oii db create odoo --instance dev
+oii module add web --sparse --modules web_responsive --apply
+oii module test web_responsive
+oii module install web_responsive --db odoo
 ```
 
 ### 6.3 Work from your fork
 
 ```bash
-odoo-installer module add server-tools --fork myuser --apply
+oii module add server-tools --fork myuser --apply
 ```
 
 ### 6.4 Mount your own checkout (never mutated)
 
 ```bash
-odoo-installer module add web --repo ~/dev/web-deploy --apply
+oii module add web --repo ~/dev/web-deploy --apply
 ```
 
 ### 6.5 Full installability report
 
 ```bash
-odoo-installer test suite --output report.md --output report.json
+oii test suite --output report.md --output report.json
 ```
 
 ### 6.6 Adopt production, inspect safely
 
 ```bash
-odoo-installer instance adopt ~/Projects/my-odoo --apply
-odoo-installer db list --instance my-odoo
-odoo-installer module approve attribute_set pim --db odoo   # proven modules → whitelist
+oii instance adopt ~/Projects/my-odoo --apply
+oii db list --instance my-odoo
+oii module approve attribute_set pim --db odoo   # proven modules → whitelist
 ```
 
 ### 6.7 Share approvals across machines
@@ -506,7 +506,7 @@ tail and the module's dependencies.
 **The database manager asks for a master password.** Nothing pre-fills that field:
 the official `odoo` image passes no master password via env, and the shipped default
 config has `admin_passwd` commented out. Read yours with
-`odoo-installer instance secret <name>`; set your own by editing `admin_passwd` in
+`oii instance secret <name>`; set your own by editing `admin_passwd` in
 `config/odoo.conf` (and `.env`) then `instance restart`.
 
 **Two instances want the same port.** See "Port already taken" — and remember a

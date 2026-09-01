@@ -62,9 +62,9 @@ Günlük kullanım için izole kurulum (dev venv ile karıştırmaktan iyidir):
 pipx install odoo-installer           # veya: uv tool install odoo-installer
 ```
 
-Kabuk tamamlama (bash/zsh/fish): `odoo-installer --install-completion`.
+Kabuk tamamlama (bash/zsh/fish): `oii --install-completion`.
 
-CLI üç isimle çalışar: `odoo-installer`, `oii` ve `python -m odoo_installer`.
+CLI üç isimle çalışar: `oii`, `odoo-installer` ve `python -m odoo_installer` — bu kılavuzdaki tüm örnekler kısa takma adı kullanır.
 
 > 💡 **Güncelleme:** `pip install -U odoo-installer` (veya `pipx upgrade
 > odoo-installer`). Sürüm hemen ardından pip "already satisfied" derse bir çalıştırmalık
@@ -103,7 +103,7 @@ Yazdırılan plan, uygulanan kod yoluyla birebir aynıdır. Plan çalışırken 
 duyurulur:
 
 ```console
-$ odoo-installer instance create dev --apply
+$ oii instance create dev --apply
 [1/8] instance dizinini oluştur
   ✔ oluşturuldu
 [2/8] docker-compose.yml üret
@@ -150,7 +150,7 @@ Genel: `--version` / `-V`, her yerde `--help`; ayrıca yalnızca sürümü basan
 ### 4.1 `doctor` — host teşhisi
 
 ```bash
-odoo-installer doctor [--json]
+oii doctor [--json]
 ```
 
 Docker engine, compose eklentisi, docker grubu üyeliği, git, instance kökündeki disk
@@ -160,7 +160,7 @@ eder. Kritik kontrol başarısızsa **4** koduyla çıkar.
 ### 4.2 `install` — host ön gereksinimleri
 
 ```bash
-odoo-installer install [--apply]
+oii install [--apply]
 ```
 
 Docker engine, compose eklentisi ve git'i pacman (Arch) veya apt (Debian/Ubuntu) ile
@@ -169,10 +169,10 @@ kurar. Odoo'nun kendisini asla kurmaz. Idempotent — karşılanmış host no-op
 ### 4.3 `config` — genel yapılandırma
 
 ```bash
-odoo-installer config show [--json]
-odoo-installer config set <anahtar> <değer>
-odoo-installer config edit          # $VISUAL/$EDITOR, kaydetmeden önce doğrular
-odoo-installer config path
+oii config show [--json]
+oii config set <anahtar> <değer>
+oii config edit          # $VISUAL/$EDITOR, kaydetmeden önce doğrular
+oii config path
 ```
 
 | Anahtar | Varsayılan | Anlamı |
@@ -192,7 +192,7 @@ geçersizse hiçbir şey yazmaz.
 #### Oluşturma
 
 ```bash
-odoo-installer instance create <ad> [--dir YOL] [--http-port N] [--image ETİKET]
+oii instance create <ad> [--dir YOL] [--http-port N] [--image ETİKET]
                             [--pg-tag N] [--apply]
 ```
 
@@ -208,10 +208,10 @@ Stack'i üretir, başlatır, `/web/health`'i bekler, instance'ı kaydeder.
 #### Listele / göster / secret / yaşam döngüsü
 
 ```bash
-odoo-installer instance list
-odoo-installer instance show <ad>
-odoo-installer instance secret <ad> [--key ANAHTAR]
-odoo-installer instance start|stop|restart <ad>
+oii instance list
+oii instance show <ad>
+oii instance secret <ad> [--key ANAHTAR]
+oii instance start|stop|restart <ad>
 ```
 
 `secret`, instance'ın `.env`'inden tek bir değeri kendi satırında yazdırır
@@ -221,7 +221,7 @@ Olmayan anahtar, uygun anahtarları listeleyen açık bir hatadır.
 #### Silme
 
 ```bash
-odoo-installer instance remove <ad> [--remove-data] [--yes] [--apply]
+oii instance remove <ad> [--remove-data] [--yes] [--apply]
 ```
 
 Varsayılan dry-run; yalnızca `--apply --yes` ile çalışır. Volume'ler `--remove-data`
@@ -232,16 +232,16 @@ verilen tek açıkça onaylanmış mutasyondur.
 #### Mevcut bir stack'i sahiplenme
 
 ```bash
-odoo-installer instance adopt <dizin> [--name AD] [--db-user odoo] [--apply]
+oii instance adopt <dizin> [--name AD] [--db-user odoo] [--apply]
 ```
 
 ### 4.5 `db` — veritabanları
 
 ```bash
-odoo-installer db list [--instance AD]
-odoo-installer db create <db> [--instance AD]           # idempotent
-odoo-installer db drop <db> [--instance AD] [--yes] [--apply]
-odoo-installer db reset <db> [--instance AD] [--yes] [--apply]
+oii db list [--instance AD]
+oii db create <db> [--instance AD]           # idempotent
+oii db drop <db> [--instance AD] [--yes] [--apply]
+oii db reset <db> [--instance AD] [--yes] [--apply]
 ```
 
 Instance'ın `db` konteynerindeki psql ile yürütülür. Veritabanı adları her zaman
@@ -253,7 +253,7 @@ açıktır; `postgres`/`template0`/`template1` reddedilir; `drop`/`reset` için
 #### Depo ekleme
 
 ```bash
-odoo-installer module add <oca-repo> [--modules m1,m2] [--sparse] [--repo YOL]
+oii module add <oca-repo> [--modules m1,m2] [--sparse] [--repo YOL]
                          [--fork KULLANICI] [--instance AD] [--yes] [--apply]
 ```
 
@@ -264,7 +264,7 @@ odoo-installer module add <oca-repo> [--modules m1,m2] [--sparse] [--repo YOL]
   doğrulayıp gösterir** (GitHub raw manifest'lerinden sınıflandırılır):
 
   ```console
-  $ odoo-installer module add web --sparse --modules web_responsive
+  $ oii module add web --sparse --modules web_responsive
   ...
   3. → verify dependencies of web_responsive
        (core: base, web, mail, web_tour · already available: —)
@@ -292,16 +292,16 @@ odoo-installer module add <oca-repo> [--modules m1,m2] [--sparse] [--repo YOL]
 #### Listele / ara
 
 ```bash
-odoo-installer module list [--instance AD] [--db DB] [--json]
-odoo-installer module search <sorgu> [--limit N]
+oii module list [--instance AD] [--db DB] [--json]
+oii module search <sorgu> [--limit N]
 ```
 
 #### Kur / yükselt
 
 ```bash
-odoo-installer module install <ad...> --db DB [--instance AD]
+oii module install <ad...> --db DB [--instance AD]
                             [--allow-untested] [--resolve-deps]
-odoo-installer module upgrade <ad...> --db DB [--instance AD]
+oii module upgrade <ad...> --db DB [--instance AD]
                             [--allow-untested] [--resolve-deps]
 ```
 
@@ -324,7 +324,7 @@ her hedefin `__manifest__.py`'sini okur:
 #### Kaldırma
 
 ```bash
-odoo-installer module remove <repo> [--db DB] [--purge-repo] [--instance AD]
+oii module remove <repo> [--db DB] [--purge-repo] [--instance AD]
                              [--yes] [--apply]
 ```
 
@@ -335,7 +335,7 @@ sahip olduğu klonlar).
 #### Tek modül testi
 
 ```bash
-odoo-installer module test <ad> [--instance AD] [--keep-db]
+oii module test <ad> [--instance AD] [--keep-db]
 ```
 
 Scratch DB'ye kurar, `--test-enable --test-tags=/<ad>` çalıştırır, logu yakalar,
@@ -345,7 +345,7 @@ PASS'leri whitelist'e kaydeder.
 #### Zaten kanıtlanmış modülleri onaylama
 
 ```bash
-odoo-installer module approve <ad...> --db DB [--instance AD]
+oii module approve <ad...> --db DB [--instance AD]
 ```
 
 Kalitesi çalışan bir stack'te kanıtlanmış modüller için: `--db`'de `installed`
@@ -354,9 +354,9 @@ durumunda olmayan her şeyi reddeder, sonra whitelist'e kaydeder — test logu g
 ### 4.7 `test` — toplu test ve merkezi senkron
 
 ```bash
-odoo-installer test suite [--instance AD] [--only REPO] [--modules m1,m2]
+oii test suite [--instance AD] [--only REPO] [--modules m1,m2]
                           [--output rapor.md] [--output rapor.json] [--keep-db]
-odoo-installer test pull [--apply]
+oii test pull [--apply]
 ```
 
 `suite`, addons_path'teki her modülü sırayla test eder (her birine taze
@@ -397,43 +397,43 @@ GitHub token'ları: `github_token_env`'in adlandırdığı ortam değişkeninden
 ### 6.1 Bir makineyi hazırlama
 
 ```bash
-odoo-installer doctor && odoo-installer install --apply && odoo-installer doctor
+oii doctor && oii install --apply && oii doctor
 ```
 
 ### 6.2 Taze dev instance + OCA modülü
 
 ```bash
-odoo-installer instance create dev --apply
-odoo-installer db create odoo --instance dev
-odoo-installer module add web --sparse --modules web_responsive --apply
-odoo-installer module test web_responsive
-odoo-installer module install web_responsive --db odoo
+oii instance create dev --apply
+oii db create odoo --instance dev
+oii module add web --sparse --modules web_responsive --apply
+oii module test web_responsive
+oii module install web_responsive --db odoo
 ```
 
 ### 6.3 Fork'unuzdan çalışma
 
 ```bash
-odoo-installer module add server-tools --fork myuser --apply
+oii module add server-tools --fork myuser --apply
 ```
 
 ### 6.4 Kendi checkout'unuzu mount etme (asla değiştirilmez)
 
 ```bash
-odoo-installer module add web --repo ~/dev/web-deploy --apply
+oii module add web --repo ~/dev/web-deploy --apply
 ```
 
 ### 6.5 Tam kurulabilirlik raporu
 
 ```bash
-odoo-installer test suite --output rapor.md --output rapor.json
+oii test suite --output rapor.md --output rapor.json
 ```
 
 ### 6.6 Üretimi sahiplenme, güvenle inceleme
 
 ```bash
-odoo-installer instance adopt ~/Projects/my-odoo --apply
-odoo-installer db list --instance my-odoo
-odoo-installer module approve attribute_set pim --db odoo   # kanıtlanmışlar → whitelist
+oii instance adopt ~/Projects/my-odoo --apply
+oii db list --instance my-odoo
+oii module approve attribute_set pim --db odoo   # kanıtlanmışlar → whitelist
 ```
 
 ### 6.7 Onayları makineler arasında paylaşma
@@ -513,7 +513,7 @@ kuyruğuna ve modülün bağımlılıklarına bakın.
 **Veritabanı yöneticisi master password soruyor.** O alanı hiçbir şey doldurmaz:
 resmi `odoo` imajı master password'ü hiçbir env ile sağlamaz, varsayılan config'de
 `admin_passwd` yorum satırıdır. Kendi şifrenizi
-`odoo-installer instance secret <ad>` ile okuyun; değiştirmek için `config/odoo.conf`
+`oii instance secret <ad>` ile okuyun; değiştirmek için `config/odoo.conf`
 içindeki `admin_passwd`'i (ve `.env`'i) düzenleyip `instance restart` verin.
 
 **İki instance aynı portu istiyor.** "Port dolu"ya bakın — durdurulmuş stack portu

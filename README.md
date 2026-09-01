@@ -42,26 +42,26 @@ pip install .
 
 Requires Python ≥ 3.11, a working `docker` engine with the `compose` plugin, and
 `git`. Isolated daily-use install: `pipx install odoo-installer`. Shell completion:
-`odoo-installer --install-completion`.
+`oii --install-completion`.
 
-Run `odoo-installer doctor` to verify the host.
+Run `oii doctor` to verify the host.
 
 ## Quick start
 
 ```bash
-odoo-installer doctor                      # host checks; exit 4 on critical failure
-odoo-installer install --apply             # install missing host prerequisites
+oii doctor                      # host checks; exit 4 on critical failure
+oii install --apply             # install missing host prerequisites
 
-odoo-installer instance create dev --apply # new stack: compose + .env + odoo.conf
-odoo-installer db create odoo --instance dev
+oii instance create dev --apply # new stack: compose + .env + odoo.conf
+oii db create odoo --instance dev
 
-odoo-installer module search "responsive"  # find OCA repos on GitHub
-odoo-installer module add web --sparse --modules web_responsive --apply
-odoo-installer module test web_responsive  # scratch-DB test run; PASS -> whitelist
-odoo-installer module install web_responsive --db odoo
+oii module search "responsive"  # find OCA repos on GitHub
+oii module add web --sparse --modules web_responsive --apply
+oii module test web_responsive  # scratch-DB test run; PASS -> whitelist
+oii module install web_responsive --db odoo
 
-odoo-installer test suite --output report.md --output report.json
-odoo-installer instance adopt ~/Projects/my-odoo --apply  # manage an existing stack
+oii test suite --output report.md --output report.json
+oii instance adopt ~/Projects/my-odoo --apply  # manage an existing stack
 ```
 
 ## Commands at a glance
