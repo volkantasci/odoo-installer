@@ -1,5 +1,5 @@
 """odoo-installer — install, configure and manage Odoo 19.0 Docker stacks."""
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 
 __all__ = ["__version__"]

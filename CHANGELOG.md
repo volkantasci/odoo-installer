@@ -21,6 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any machine (test PASSes or `module approve`) spread to every machine that pulls;
   the CLI itself does not need updating for new approvals, only the repo does.
 
+## [0.5.1] - 2026-09-01
+
+### Fixed
+
+- `module add` now explains the most common mistake: passing a MODULE name
+  (e.g. `web_responsive`) where a REPO name (`web`) is expected. When the whitelist
+  catalog knows the module, the error names the providing repo and prints the exact
+  command (`oii module add web`); otherwise it points at `module search`.
+
 ## [0.5.0] - 2026-09-01
 
 ### Added
