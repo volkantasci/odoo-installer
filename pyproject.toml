@@ -64,6 +64,8 @@ include = [
     "README.md",
     "CHANGELOG.md",
     "DEVELOPMENT.md",
+    "USAGE.md",
+    "USAGE.tr.md",
     "LICENSE",
 ]
 

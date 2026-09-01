@@ -13,6 +13,9 @@ correct-branch OCA module management and automated installability testing of OCA
 The development plan, architecture, decisions, and milestones live in
 [DEVELOPMENT.md](DEVELOPMENT.md).
 
+Detailed usage guide: [USAGE.md](USAGE.md) (English) · [USAGE.tr.md](USAGE.tr.md)
+(Türkçe).
+
 ## Installation
 
 ```bash
