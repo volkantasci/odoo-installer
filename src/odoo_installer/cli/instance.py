@@ -155,7 +155,10 @@ def remove(
     *,
     remove_data: Annotated[
         bool,
-        typer.Option("--remove-data", help="Also destroy the postgres data volume."),
+        typer.Option(
+            "--remove-data",
+            help="Also destroy the stack's named data volumes (compose down -v).",
+        ),
     ] = False,
     yes: Annotated[
         bool,
@@ -163,7 +166,7 @@ def remove(
     ] = False,
     apply_changes: Annotated[bool, typer.Option("--apply", help=_APPLY_HELP)] = False,
 ) -> None:
-    """Remove an instance. Dry-run by default; execution requires --apply --yes."""
+    """Remove an instance — adopted stacks included. Dry-run by default; --apply --yes runs."""
     container = deps.build()
     try:
         steps = remove_instance_plan(

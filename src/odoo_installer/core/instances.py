@@ -317,7 +317,13 @@ def remove_instance_plan(
     docker: DockerLike,
     remove_data: bool,
 ) -> list[Step]:
-    """Build the removal plan; guards refuse anything the CLI did not create."""
+    """Build the removal plan; guards refuse anything the CLI did not create.
+
+    Adopted stacks CAN be removed — the tool is read-mostly (§6.7), but removal is an
+    explicit, `--yes`-gated destructive action, not a silent rewrite. `--remove-data`
+    maps to `compose down -v`, which destroys the named volumes declared in the
+    stack's own compose file (bind-mounted data goes with the directory).
+    """
     stack_dir = _registered_dir(name, registry_path)
     manifest = load_manifest(fs, stack_dir)
     if manifest is None:
@@ -325,13 +331,12 @@ def remove_instance_plan(
             f"refusing to remove {name!r}: no {MANIFEST_NAME} in {stack_dir} "
             "(the directory was not created by odoo-installer)"
         )
-    if manifest.adopted:
-        raise StackError(f"refusing to remove adopted instance {name!r}")
 
     down_args = ["down", "--remove-orphans"] + (["-v"] if remove_data else [])
+    down_note = "removed" + (" with volumes" if remove_data else "")
 
     def run_down() -> str:
-        return docker.compose(down_args, stack_dir) or "removed"
+        return docker.compose(down_args, stack_dir) or down_note
 
     def run_delete() -> str:
         fs.remove_tree(stack_dir)
@@ -341,14 +346,15 @@ def remove_instance_plan(
         remove_registry_entry(registry_path, name)
         return "removed"
 
+    kind = "adopted stack" if manifest.adopted else "instance"
     steps: list[Step] = [
         Step(
-            description="stop and remove containers"
+            description=f"stop and remove the {kind}'s containers"
             + (" and volumes" if remove_data else " (volumes kept)"),
             run=run_down,
         ),
         Step(
-            description=f"delete instance directory {stack_dir}",
+            description=f"delete the {kind} directory {stack_dir}",
             run=run_delete,
         ),
         Step(

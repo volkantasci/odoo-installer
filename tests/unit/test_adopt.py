@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,7 @@ from odoo_installer.core.instances import (
     compose_action,
     detect_stack,
     load_manifest,
+    remove_instance_plan,
 )
 from odoo_installer.core.plan import apply_steps
 from odoo_installer.exceptions import StackError
@@ -144,3 +146,44 @@ def test_adopted_lifecycle_start_never_recreates(tmp_path: Path) -> None:
     compose_action("start", tmp_path, docker, adopted=True)
     compose_action("start", tmp_path, docker, adopted=False)
     assert [call[0] for call in docker.compose_calls] == [("start",), ("up", "-d")]
+
+
+def _adopt(tmp_path: Path) -> tuple[FakeFs, FakeDocker, Path, Path]:
+    fs, docker = FakeFs(), FakeDocker(containers=LIVE_STACK)
+    registry_path = tmp_path / "registry.toml"
+    stack_dir = tmp_path / "stack"
+    detected = detect_stack(docker, stack_dir)
+    plan = adopt_instance_plan(
+        name="odoo-docker",
+        stack_dir=stack_dir,
+        detected=detected,
+        db_user="odoo",
+        fs=fs,
+        registry_path=registry_path,
+    )
+    apply_steps(plan.steps)
+    docker.compose_calls.clear()
+    return fs, docker, registry_path, stack_dir
+
+
+def test_remove_plan_adopted_keeps_volumes_by_default(tmp_path: Path) -> None:
+    fs, docker, registry_path, stack_dir = _adopt(tmp_path)
+    steps = remove_instance_plan(
+        name="odoo-docker", registry_path=registry_path, fs=fs, docker=docker, remove_data=False
+    )
+    descriptions = [step.description for step in steps]
+    assert any("adopted stack" in d for d in descriptions)
+    apply_steps(steps)
+    assert docker.compose_calls[-1][0] == ("down", "--remove-orphans")
+    assert not stack_dir.exists()
+    registry = tomllib.loads(registry_path.read_text(encoding="utf-8"))
+    assert "odoo-docker" not in registry["instances"]
+
+
+def test_remove_plan_adopted_with_data_destroys_volumes(tmp_path: Path) -> None:
+    fs, docker, registry_path, _ = _adopt(tmp_path)
+    steps = remove_instance_plan(
+        name="odoo-docker", registry_path=registry_path, fs=fs, docker=docker, remove_data=True
+    )
+    apply_steps(steps)
+    assert docker.compose_calls[-1][0] == ("down", "--remove-orphans", "-v")
