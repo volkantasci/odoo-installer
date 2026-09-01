@@ -102,6 +102,7 @@ def add(
             git=container.git,
             fs=container.fs,
             docker=container.docker,
+            catalog=load_tested_registry(container.tested_path).modules,
         )
     except OdooInstallerError as exc:
         error(str(exc))

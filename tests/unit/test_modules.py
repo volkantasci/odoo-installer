@@ -20,7 +20,7 @@ from odoo_installer.core.modules import (
 )
 from odoo_installer.core.plan import apply_steps
 from odoo_installer.exceptions import StackError
-from odoo_installer.schemas import GlobalConfig, InstanceManifest, RepoRecord
+from odoo_installer.schemas import GlobalConfig, InstanceManifest, RepoRecord, TestedModule
 
 COMPOSE = """services:
   web:
@@ -447,3 +447,53 @@ def test_module_remove_plan_unknown_repo_fails(tmp_path: Path) -> None:
             fs=FakeFs(),
             docker=FakeDocker(),
         )
+
+
+def test_missing_branch_error_suggests_provider_repo(tmp_path: Path) -> None:
+    # user passed a MODULE name (web_responsive); the catalog knows the repo
+    manifest = make_manifest(tmp_path)
+    with pytest.raises(StackError) as excinfo:
+        module_add_plan(
+            config=make_config(tmp_path),
+            manifest=manifest,
+            repo_arg="web_responsive",
+            modules_opt=None,
+            sparse=False,
+            fork=None,
+            existing_repo=None,
+            github=FakeGitHub(branch_exists=False),
+            git=FakeGit(sample_modules=("web_responsive",)),
+            fs=FakeFs(),
+            docker=FakeDocker(),
+            catalog={
+                "web_responsive": TestedModule(
+                    name="web_responsive", repo="OCA/web", branch="19.0", deps=[]
+                )
+            },
+        )
+    message = str(excinfo.value)
+    assert "does not exist on OCA/web_responsive" in message
+    assert "is a MODULE provided by OCA/web" in message
+    assert "oii module add web" in message
+
+
+def test_missing_branch_error_generic_hint_without_catalog(tmp_path: Path) -> None:
+    manifest = make_manifest(tmp_path)
+    with pytest.raises(StackError) as excinfo:
+        module_add_plan(
+            config=make_config(tmp_path),
+            manifest=manifest,
+            repo_arg="no-such-repo",
+            modules_opt=None,
+            sparse=False,
+            fork=None,
+            existing_repo=None,
+            github=FakeGitHub(branch_exists=False),
+            git=FakeGit(),
+            fs=FakeFs(),
+            docker=FakeDocker(),
+            catalog=None,
+        )
+    message = str(excinfo.value)
+    assert "does not exist on OCA/no-such-repo" in message
+    assert "module search no-such-repo" in message

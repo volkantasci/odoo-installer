@@ -391,6 +391,33 @@ def resolve_dependencies(
     return resolution
 
 
+def _missing_branch_error(
+    name: str, origin_owner: str, branch: str, catalog: dict[str, TestedModule] | None
+) -> str:
+    """Branch check failure with an actionable hint.
+
+    The most common cause is passing a MODULE name (`web_responsive`) where a REPO
+    name (`web`) is expected; the whitelist catalog knows which repo provides a
+    module, so point the user at the exact command instead of a bare failure.
+    """
+    base = (
+        f"branch {branch!r} does not exist on {origin_owner}/{name} "
+        "(checked via the GitHub API; refusing to guess a branch)"
+    )
+    entry = (catalog or {}).get(name)
+    if entry is not None and entry.repo != "local":
+        short = entry.repo.split("/")[-1]
+        return (
+            f"{base}. Hint: {name!r} is a MODULE provided by {entry.repo} — "
+            f"run: oii module add {short}"
+        )
+    return (
+        f"{base}. Hint: 'module add' expects an OCA REPO name (e.g. 'web', "
+        f"'server-tools') — to find the repo providing a module, run: "
+        f"oii module search {name}"
+    )
+
+
 def module_add_plan(
     *,
     config: GlobalConfig,
@@ -404,6 +431,7 @@ def module_add_plan(
     git: GitLike,
     fs: FileSystemLike,
     docker: DockerLike,
+    catalog: dict[str, TestedModule] | None = None,
 ) -> ModulePlan:
     owner, name = split_repo(repo_arg)
     full = f"{owner}/{name}"
@@ -442,10 +470,7 @@ def module_add_plan(
         # eager verification (DEVELOPMENT.md §6.1): a dry-run must fail fast on a
         # missing branch instead of rendering a plan that cannot execute
         if not github.branch_exists(f"{origin_owner}/{name}", branch):
-            raise StackError(
-                f"branch {branch!r} does not exist on {origin_owner}/{name} "
-                "(checked via the GitHub API; refusing to guess a branch)"
-            )
+            raise StackError(_missing_branch_error(name, origin_owner, branch, catalog))
 
     def sync_clone() -> str:
         existed = git.is_repo(host_path)
