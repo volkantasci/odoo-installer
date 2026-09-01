@@ -123,12 +123,16 @@ def add(
         raise typer.Exit(code=1) from None
     if manifest.adopted:
         console.print(
-            "[yellow]adopted stack: restart it with your own tooling "
-            "(e.g. ./restart.sh) to apply the new mount — the CLI did not touch "
-            "the running containers[/yellow]"
+            "[yellow]adopted stack: recreate it with your own tooling "
+            "(e.g. `docker compose up -d web`) to apply the new mount — the CLI "
+            "did not touch the running containers[/yellow]"
         )
     else:
         console.print(f"[green]✔[/green] {plan.repo} added")
+    console.print(
+        "[dim]next: `module test <module>` to whitelist it, then "
+        "`module install <module> --db <db>`[/dim]"
+    )
 
 
 @app.command("list")

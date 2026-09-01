@@ -13,6 +13,7 @@ Rules implemented here:
 
 from __future__ import annotations
 
+import contextlib
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -106,15 +107,23 @@ def _resolve_host(host: str, stack_dir: Path) -> Path:
 
 
 def compose_volume_edit(
-    content: str, host_path: Path, container_path: str, web_service: str
+    content: str,
+    host_path: Path,
+    container_path: str,
+    web_service: str,
+    base_dir: Path | None = None,
 ) -> tuple[str, bool]:
-    """Append `- <host>:<container>` to the service's volumes; (content, changed)."""
-    if re.search(
-        rf"-\s*{re.escape(str(host_path))}:{re.escape(container_path)}(?:\s|$)",
-        content,
-        re.M,
-    ):
-        return content, False
+    """Append `- <host>:<container>` to the service's volumes; (content, changed).
+
+    The idempotency check accepts both the absolute form of `host_path` and its
+    relative form against `base_dir` (e.g. `./repos/oca-web`), so a hand-written
+    relative mount line never gets a duplicate twin.
+    """
+    for variant in _mount_variants(host_path, base_dir):
+        if re.search(
+            rf"-\s*{re.escape(variant)}:{re.escape(container_path)}(?:\s|$)", content, re.M
+        ):
+            return content, False
     lines, had_nl = _split(content)
     header, end = _service_block(lines, web_service)
     vol_idx, vol_indent = _volumes_key(lines, header, end, web_service)
@@ -123,14 +132,26 @@ def compose_volume_edit(
     return _join(lines, had_nl), True
 
 
-def compose_volume_remove(content: str, host_path: Path, container_path: str) -> tuple[str, bool]:
-    pattern = re.compile(
-        rf"^\s*-\s*{re.escape(str(host_path))}:{re.escape(container_path)}\s*(?:#.*)?$",
-        re.M,
-    )
-    if not pattern.search(content):
+def _mount_variants(host_path: Path, base_dir: Path | None) -> list[str]:
+    variants = [str(host_path)]
+    if base_dir is not None:
+        with contextlib.suppress(ValueError):
+            variants.append(f"./{host_path.relative_to(base_dir).as_posix()}")
+    return variants
+
+
+def compose_volume_remove(
+    content: str, host_path: Path, container_path: str, base_dir: Path | None = None
+) -> tuple[str, bool]:
+    patterns = [
+        re.compile(rf"^\s*-\s*{re.escape(variant)}:{re.escape(container_path)}\s*(?:#.*)?$", re.M)
+        for variant in _mount_variants(host_path, base_dir)
+    ]
+    if not any(pattern.search(content) for pattern in patterns):
         return content, False
-    new = pattern.sub("", content)
+    new = content
+    for pattern in patterns:
+        new = pattern.sub("", new)
     new = re.sub(r"\n\n+", "\n\n", new)  # collapse blank holes left by removal
     return new, True
 
@@ -266,6 +287,17 @@ def module_add_plan(
     state = {"changed": False}
     steps: list[Step] = []
 
+    # a different repo with the same short name would mount onto the same container
+    # path (/mnt/oca/<name>) — two mounts on one target is a compose conflict
+    clash = next(
+        (r for r in manifest.repos if r.repo.split("/")[-1] == name and r.repo != full), None
+    )
+    if clash is not None:
+        raise StackError(
+            f"{clash.repo!r} is already mounted at {clash.container_path}; "
+            f"remove it first ('module remove {name}') before adding {full!r}"
+        )
+
     if existing_repo is not None:
         # eager, local-only checks: the CLI never mutates checkouts it does not own
         if not git.is_repo(existing_repo):
@@ -358,7 +390,7 @@ def module_add_plan(
         if original is None:
             raise StackError(f"{compose_path} not found")
         new, changed = compose_volume_edit(
-            original, host_path, container_path, manifest.web_service
+            original, host_path, container_path, manifest.web_service, base_dir=manifest.dir
         )
         if not changed:
             return "unchanged"
@@ -419,16 +451,18 @@ def module_add_plan(
 
     if not manifest.adopted:
 
-        def restart() -> str:
+        def recreate() -> str:
             if not state["changed"]:
                 return "skipped (nothing changed)"
-            return docker.compose(["restart", manifest.web_service], manifest.dir) or "restarted"
+            # a plain `restart` reuses the old container and would NOT mount the new
+            # volume; `up -d` recreates the service because its config changed
+            return docker.compose(["up", "-d", manifest.web_service], manifest.dir) or "recreated"
 
         steps.append(
             Step(
-                description=f"restart web service {manifest.web_service!r} "
-                "to apply the new addons_path",
-                run=restart,
+                description=f"recreate web service {manifest.web_service!r} "
+                "(docker compose up -d) to mount the repo and apply the new addons_path",
+                run=recreate,
             )
         )
 
@@ -493,11 +527,19 @@ def module_remove_plan(
         original = fs.read_text(compose_path)
         if original is None:
             raise StackError(f"{compose_path} not found")
-        new, changed = compose_volume_remove(original, record.host_path, record.container_path)
+        new, changed = compose_volume_remove(
+            original, record.host_path, record.container_path, base_dir=manifest.dir
+        )
         if not changed:
             return "unchanged"
+        pre_ok = _compose_config_ok(docker, manifest.dir)
         backup = _backup(fs, compose_path, original)
         fs.write_text(compose_path, new)
+        if pre_ok and not _compose_config_ok(docker, manifest.dir):
+            fs.write_text(compose_path, original)
+            raise StackError(
+                f"docker compose rejected the edited file; original restored (backup: {backup})"
+            )
         state["changed"] = True
         return f"mount removed (backup: {backup.name})"
 
@@ -554,12 +596,16 @@ def module_remove_plan(
 
     if not manifest.adopted:
 
-        def restart() -> str:
+        def recreate() -> str:
             if not state["changed"]:
                 return "skipped (nothing changed)"
-            return docker.compose(["restart", manifest.web_service], manifest.dir) or "restarted"
+            # `up -d` recreates the service without the removed mount; a plain
+            # `restart` would keep serving with the old (still-mounted) volume
+            return docker.compose(["up", "-d", manifest.web_service], manifest.dir) or "recreated"
 
-        steps.append(Step(description=f"restart web service {manifest.web_service!r}", run=restart))
+        steps.append(
+            Step(description=f"recreate web service {manifest.web_service!r}", run=recreate)
+        )
 
     return ModulePlan(
         repo=record.repo,

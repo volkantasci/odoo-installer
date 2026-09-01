@@ -87,6 +87,29 @@ def test_compose_volume_edit_is_idempotent() -> None:
     assert once == again
 
 
+def test_compose_volume_edit_dedupes_relative_variant(tmp_path: Path) -> None:
+    # a hand-written relative mount line must not get a duplicate absolute twin
+    host = tmp_path / "repos" / "oca-web"
+    relative = COMPOSE.replace(
+        "      - ./addons/local:/mnt/extra-addons",
+        "      - ./addons/local:/mnt/extra-addons\n      - ./repos/oca-web:/mnt/oca/web",
+    )
+    again, changed = compose_volume_edit(relative, host, "/mnt/oca/web", "web", base_dir=tmp_path)
+    assert not changed
+    assert again.count("/mnt/oca/web") == 1
+
+
+def test_compose_volume_remove_matches_relative_variant(tmp_path: Path) -> None:
+    host = tmp_path / "repos" / "oca-web"
+    relative = COMPOSE.replace(
+        "      - ./addons/local:/mnt/extra-addons",
+        "      - ./addons/local:/mnt/extra-addons\n      - ./repos/oca-web:/mnt/oca/web",
+    )
+    restored, changed = compose_volume_remove(relative, host, "/mnt/oca/web", base_dir=tmp_path)
+    assert changed
+    assert "/mnt/oca/web" not in restored
+
+
 def test_compose_volume_edit_requires_volumes_key() -> None:
     minimal = "services:\n  web:\n    image: odoo:19.0\n"
     with pytest.raises(StackError, match="volumes"):
@@ -164,7 +187,7 @@ def test_module_add_plan_happy_created_instance(tmp_path: Path) -> None:
     assert loaded.repos[0].branch == "19.0"
 
 
-def test_module_add_plan_restarts_created_instance(tmp_path: Path) -> None:
+def test_module_add_plan_recreates_created_instance(tmp_path: Path) -> None:
     fs, git, docker = FakeFs(), FakeGit(sample_modules=("server_util_foo",)), FakeDocker()
     manifest = make_manifest(tmp_path)
     plan = module_add_plan(
@@ -181,7 +204,36 @@ def test_module_add_plan_restarts_created_instance(tmp_path: Path) -> None:
         docker=docker,
     )
     apply_steps(plan.steps)
-    assert ("restart", manifest.web_service) in [args for args, _ in docker.compose_calls]
+    assert ("up", "-d", manifest.web_service) in [args for args, _ in docker.compose_calls]
+
+
+def test_module_add_plan_refuses_same_container_path_clash(tmp_path: Path) -> None:
+    manifest = make_manifest(tmp_path)
+    manifest.repos = [
+        RepoRecord(
+            repo="OCA/web",
+            url="https://github.com/OCA/web.git",
+            branch="19.0",
+            commit="a" * 40,
+            host_path=manifest.dir / "repos" / "oca-web",
+            container_path="/mnt/oca/web",
+            modules=["web_responsive"],
+        )
+    ]
+    with pytest.raises(StackError, match="already mounted at /mnt/oca/web"):
+        module_add_plan(
+            config=make_config(tmp_path),
+            manifest=manifest,
+            repo_arg="myfork/web",
+            modules_opt=None,
+            sparse=False,
+            fork=None,
+            existing_repo=None,
+            github=FakeGitHub(),
+            git=FakeGit(sample_modules=("web_responsive",)),
+            fs=FakeFs(),
+            docker=FakeDocker(),
+        )
 
 
 def test_module_add_plan_skips_restart_when_nothing_changes(tmp_path: Path) -> None:
@@ -266,7 +318,7 @@ def test_module_add_plan_adopted_has_no_restart_step(tmp_path: Path) -> None:
         fs=FakeFs(),
         docker=FakeDocker(),
     )
-    assert not any("restart" in step.description for step in plan.steps)
+    assert not any(("restart" in d or "recreate" in d) for d in (s.description for s in plan.steps))
 
 
 def test_module_add_plan_adopted_clones_into_repo_root(tmp_path: Path) -> None:
@@ -379,7 +431,7 @@ def test_module_remove_plan_unmounts_and_purges(tmp_path: Path) -> None:
     )
     assert loaded.repos == []
     assert not (manifest.dir / "repos" / "oca-server-utils").exists()
-    assert ("restart", "web") in [args for args, _ in docker.compose_calls]
+    assert ("up", "-d", "web") in [args for args, _ in docker.compose_calls]
 
 
 def test_module_remove_plan_unknown_repo_fails(tmp_path: Path) -> None:

@@ -127,8 +127,8 @@ stack'ler **okuma-ağırlıklı** yönetilir:
 - `start/stop/restart`, `exec`, `psql` ve log erişimi normal çalışır.
 - `start`, `docker compose start` kullanır — stack asla yeniden oluşturulmaz.
 - Dosya değişiklikleri (ör. `module add` ile mount eklemek) açık `--yes` gerektirir ve
-  CLI sahiplenilen stack'i **asla yeniden başlatmaz** — kendi aracınızla yeniden
-  başlatmanızı söyler.
+  CLI sahiplenilen stack'i **asla yeniden yaratmaz** — konteynerleri kendiniz
+  yeniden yaratmanızı (`docker compose up -d web`) söyler.
 - Tek mutasyon istisnası `instance remove --apply --yes`'tır: stack'i söker ve
   dizinini siler (bkz. §4.4).
 
@@ -328,8 +328,9 @@ odoo-installer module add <oca-repo> [--modules m1,m2] [--sparse] [--repo YOL]
 - `--fork KULLANICI`: fork'unuzdan klonlar (`origin` = fork'unuz, `upstream` = OCA).
 - Sonrasında CLI, compose volume'ünü + `addons_path` girdisini ekler (otomatik
   yedekler ve `docker compose config` doğrulamasıyla) ve oluşturduğu stack'lerde
-  `web`'i yeniden başlatır. Sahiplenilen stack'lerde `--yes` ister ve yeniden
-  başlatmayı size bırakır.
+  `web`'i **yeniden yaratır** (`docker compose up -d` — sıradan bir restart yeni
+  volume mount'unu uygulamaz). Sahiplenilen stack'lerde `--yes` ister ve yeniden
+  yaratmayı size bırakır.
 
 ```console
 $ odoo-installer module add web --sparse --modules web_responsive --apply
@@ -529,7 +530,7 @@ odoo-installer module upgrade my_module --db odoo       # yalnızca beyaz listed
   `already satisfied` raporlar.
 - **Açık veritabanı adları:** CLI asla kendiliğinden bir veritabanı adı uydurmaz.
 - **Sahiplenilen stack'ler:** `--yes` olmadan asla yeniden yazılmaz, CLI tarafından
-  asla yeniden başlatılmaz.
+  asla yeniden yaratılmaz (tek istisna: açık `instance remove --apply --yes`).
 - **Scratch DB'ler:** `oitest_*` adları, `--keep-db` verilmedikçe kullanımdan sonra
   silinir.
 
@@ -577,10 +578,11 @@ stack portunu rezerve etmez, bu yüzden iki instance aynı porta kaydolabilir. O
 sırayla başlatın, `--http-port` ile sabitleyin veya `config set port_range_end ...`
 ile aralığı genişletin.
 
-**Sahiplenilen stack "restart with your own tooling" diyor.**
+**Sahiplenilen stack "recreate it with your own tooling" diyor.**
 Sahiplenilen stack'te `module add --yes` sonrası CLI dosyaları günceller ama
-konteynerleri asla yeniden başlatmaz — yeni mount'ın uygulanması için stack'i kendiniz
-yeniden başlatın (ör. `./restart.sh`).
+konteynerleri asla yeniden yaratmaz — yeni mount'ın uygulanması için web servisini
+kendiniz yeniden yaratın (`docker compose up -d web`; sıradan bir restart yeni
+volume mount'unu uygulamaz).
 
 **Modül kuruldu ama Odoo onu kurulu değil gösteriyor.**
 `module install`, `ir_module_module` durumlarını doğrular ve hatalıları listeleyerek 1

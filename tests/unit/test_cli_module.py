@@ -64,13 +64,13 @@ def prepared_instance(tmp_path: Path, patch_deps) -> tuple[Container, InstanceMa
     return container, manifest
 
 
-def test_module_add_apply_edits_files_and_restarts(patch_deps, tmp_path: Path) -> None:
+def test_module_add_apply_edits_files_and_recreates(patch_deps, tmp_path: Path) -> None:
     container, manifest = prepared_instance(tmp_path, patch_deps)
     result = runner.invoke(app, ["module", "add", "server-utils", "--apply"])
     assert result.exit_code == 0, result.output
     compose = (manifest.dir / "docker-compose.yml").read_text(encoding="utf-8")
     assert "/mnt/oca/server-utils" in compose
-    assert ("restart", "web") in [args for args, _ in container.docker.compose_calls]
+    assert ("up", "-d", "web") in [args for args, _ in container.docker.compose_calls]
     assert "added" in result.output
 
 
@@ -122,8 +122,8 @@ def test_module_add_adopted_requires_yes(patch_deps, tmp_path: Path) -> None:
     assert with_yes.exit_code == 0, with_yes.output
     assert "/mnt/oca/server-utils" in (stack / "docker-compose.yml").read_text(encoding="utf-8")
     # read-mostly: never restarted by the CLI (config --quiet validation is allowed)
-    assert ("restart", "web") not in [args for args, _ in container.docker.compose_calls]
-    assert "restart it with your own tooling" in with_yes.output
+    assert ("up", "-d", "web") not in [args for args, _ in container.docker.compose_calls]
+    assert "recreate it with your own tooling" in with_yes.output
 
 
 def test_module_add_bad_branch_fails(patch_deps, tmp_path: Path) -> None:
@@ -271,7 +271,7 @@ def test_module_remove_unmounts_and_resets_states(patch_deps, tmp_path: Path) ->
     assert any("ir_module_module" in s and "uninstalled" in s for s in sqls)
     compose = (tmp_path / "instances" / "dev" / "docker-compose.yml").read_text(encoding="utf-8")
     assert "oca-server-utils" not in compose
-    assert ("restart", "web") in [args for args, _ in container.docker.compose_calls]
+    assert ("up", "-d", "web") in [args for args, _ in container.docker.compose_calls]
 
 
 def test_module_test_pass_records_whitelist(patch_deps, tmp_path: Path) -> None:

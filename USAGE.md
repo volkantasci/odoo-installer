@@ -320,8 +320,10 @@ odoo-installer module add <oca-repo> [--modules m1,m2] [--sparse] [--repo PATH]
   switches branches or mutates a checkout it does not own.
 - `--fork USER`: clone from your fork (`origin = your fork`, `upstream = OCA`).
 - Afterwards the CLI appends the compose volume + `addons_path` entry (with automatic
-  backups and `docker compose config` validation) and restarts `web` — for stacks it
-  created. On adopted stacks it requires `--yes` and reports the restart for you to do.
+  backups and `docker compose config` validation) and **recreates** `web`
+  (`docker compose up -d` — a plain restart would not mount the new volume) for stacks
+  it created. On adopted stacks it requires `--yes` and tells you to recreate the
+  stack yourself.
 
 ```console
 $ odoo-installer module add web --sparse --modules web_responsive --apply
@@ -519,7 +521,8 @@ odoo-installer module upgrade my_module --db odoo       # only if PASSed the whi
   cloned at the right commit? addons_path already contains the entry?) and reports
   `already satisfied` instead of redoing work.
 - **Explicit database names:** the CLI never invents a database name.
-- **Adopted stacks:** never rewritten without `--yes`, never restarted by the CLI.
+- **Adopted stacks:** never rewritten without `--yes`, never recreated by the CLI
+  (the one exception: explicit `instance remove --apply --yes`).
 - **Scratch DBs:** `oitest_*` names, dropped after use unless `--keep-db`.
 
 Exit codes:
@@ -565,10 +568,10 @@ does not reserve its port, so two instances can end up registered on the same on
 them one at a time, pin a port with `--http-port`, or widen the range via
 `config set port_range_end ...`.
 
-**Adopted stack says "restart with your own tooling".**
+**Adopted stack says "recreate it with your own tooling".**
 After `module add --yes` on an adopted stack, the CLI updates the files but never
-restarts containers — restart the stack yourself (e.g. `./restart.sh`) to apply the new
-mount.
+recreates containers — recreate the web service yourself (e.g. `docker compose up -d
+web`; a plain restart would not mount the new volume).
 
 **A module installed but Odoo reports it uninstalled.**
 `module install` verifies `ir_module_module` states and exits 1 listing the offenders —

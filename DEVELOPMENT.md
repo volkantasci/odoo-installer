@@ -63,7 +63,8 @@ odoo-installer instance adopt <dir>
 
 odoo-installer module add <oca-repo> [--modules m1,m2] [--sparse] [--repo PATH] [--apply]
     Clone OCA/<repo> at the branch matching 19.0, mount it into the stack, rewrite
-    addons_path, restart web. --repo mounts an existing local checkout instead of cloning.
+    addons_path, recreate web (`up -d`; a plain restart would not mount the new
+    volume). --repo mounts an existing local checkout instead of cloning.
 odoo-installer module list [--instance NAME] [--json]
 odoo-installer module search <query>
     GitHub API: find OCA repos and the modules they contain for 19.0.
@@ -241,7 +242,9 @@ volumes: { pgdata: }
 
 - The db service is **not** published on the host; all DB access goes through the stack.
 - `addons_path` in `odoo.conf` starts as `/mnt/extra-addons` and gains `/mnt/oca/<repo>`
-  entries when repos are added; `module add` rewrites the file and restarts `web`.
+  entries when repos are added; `module add` rewrites the file and recreates `web`
+  (`docker compose up -d`) — a plain `restart` reuses the old container and would not
+  mount the new volume.
 - Port allocation: first free port in 8069–8099 unless `--http-port` is given. A port
   is "free" at allocation time only — a stopped stack does not reserve its port, so two
   instances can end up sharing one; start them one at a time or pin ports explicitly.
@@ -413,7 +416,7 @@ refuses without `--yes`.
 
 ### M4 — OCA modules
 `module add` (branch verification, clone/sparse/existing-checkout, mount + addons_path
-rewrite + restart), `module list/search/install/upgrade/remove`, GitHub search adapter.
+rewrite + web recreation), `module list/search/install/upgrade/remove`, GitHub search adapter.
 **Done when:** an OCA module is added from GitHub at `origin/19.0`, installed into a
 scratch DB inside the adopted stack, and listed with correct install state; integration
 test runs the same flow against a throwaway stack.
