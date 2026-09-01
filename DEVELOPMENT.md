@@ -68,9 +68,13 @@ odoo-installer module add <oca-repo> [--modules m1,m2] [--sparse] [--repo PATH] 
 odoo-installer module list [--instance NAME] [--json]
 odoo-installer module search <query>
     GitHub API: find OCA repos and the modules they contain for 19.0.
-odoo-installer module install <name...> [--db DB]
-odoo-installer module upgrade <name...> [--db DB]
-    Run `odoo -d <db> -i/-u <name> --stop-after-init --http-port=8071` inside the web container.
+odoo-installer module install <name...> [--db DB] [--resolve-deps]
+odoo-installer module upgrade <name...> [--db DB] [--resolve-deps]
+    Run `odoo -d <db> -i/-u <name> --stop-after-init --http-port=8071` inside the web
+    container. With --resolve-deps, missing OCA dependencies are resolved against the
+    whitelist catalog: their provider repos are mounted automatically and the deps are
+    included in the install (core deps are detected from the web container and never
+    block).
 odoo-installer module remove <name...> [--db DB] [--purge-repo] [--yes]
 
 odoo-installer db list [--instance] | create <db> [--instance]

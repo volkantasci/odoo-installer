@@ -32,7 +32,7 @@ from odoo_installer.core.instances import (
 )
 from odoo_installer.core.plan import Step
 from odoo_installer.exceptions import StackError
-from odoo_installer.schemas import GlobalConfig, InstanceManifest, RepoRecord
+from odoo_installer.schemas import GlobalConfig, InstanceManifest, RepoRecord, TestedModule
 
 MANIFEST_FILE = "__manifest__.py"
 CONTAINER_MOUNT_PREFIX = "/mnt/oca"
@@ -87,6 +87,65 @@ def available_modules(fs: FileSystemLike, manifest: InstanceManifest) -> dict[st
         for module in record.modules or discover_modules(fs, record.host_path):
             found.setdefault(module, record.repo)
     return found
+
+
+def read_manifest_deps(fs: FileSystemLike, module_dir: Path) -> list[str]:
+    """Read `depends` from a module's __manifest__.py; [] when unreadable.
+
+    Best effort by design: the manifest is normally a Python literal (ast-parsed);
+    exotic manifests fall back to a regex; a total failure never blocks the caller —
+    Odoo itself re-checks dependencies at install time.
+    """
+    raw = fs.read_text(module_dir / MANIFEST_FILE)
+    if raw is None:
+        return []
+    try:
+        import ast
+
+        data = ast.literal_eval(raw)
+        if isinstance(data, dict):
+            return [str(dep) for dep in data.get("depends", [])]
+    except (ValueError, SyntaxError):
+        pass
+    match = re.search(r"['\"]depends['\"]\s*:\s*\[([^\]]*)\]", raw, re.S)
+    if not match:
+        return []
+    return re.findall(r"['\"]([\w.]+)['\"]", match.group(1))
+
+
+def module_manifest_deps(fs: FileSystemLike, manifest: InstanceManifest, module: str) -> list[str]:
+    """Dependencies of one visible module: local addons dir or its mounted clone."""
+    if module in discover_modules(fs, manifest.dir / "addons" / "local"):
+        return read_manifest_deps(fs, manifest.dir / "addons" / "local" / module)
+    record = next((r for r in manifest.repos if module in r.modules), None)
+    if record is not None:
+        return read_manifest_deps(fs, record.host_path / module)
+    return []
+
+
+def list_core_addons(docker: DockerLike, manifest: InstanceManifest) -> set[str]:
+    """Module dirs of the Odoo core inside the web container (best effort).
+
+    The official image keeps the core addons at
+    /usr/lib/python3/dist-packages/odoo/addons; an empty set means the listing could
+    not be obtained and the caller must treat unknown dependencies as unresolved.
+    """
+    try:
+        out = docker.compose(
+            [
+                "exec",
+                "-T",
+                manifest.web_service,
+                "sh",
+                "-c",
+                "ls /usr/lib/python3/dist-packages/odoo/addons",
+            ],
+            manifest.dir,
+            timeout_s=60,
+        )
+    except Exception:
+        return set()
+    return {line.strip() for line in out.splitlines() if line.strip()}
 
 
 def find_odoo_conf_host_path(compose_content: str, stack_dir: Path) -> Path | None:
@@ -264,6 +323,72 @@ def _compose_config_ok(docker: DockerLike, stack_dir: Path) -> bool:
         return True
     except Exception:
         return False
+
+
+@dataclass
+class DepResolution:
+    """Result of dependency resolution for a planned install/upgrade."""
+
+    to_install: list[str] = field(default_factory=list)  # targets + resolved OCA deps
+    to_mount: list[tuple[str, str, list[str]]] = field(default_factory=list)
+    # ^ (repo_full, branch, dep_modules) — repos the resolver would mount
+    unresolved: list[str] = field(default_factory=list)  # neither core, mounted, nor catalog
+
+    @property
+    def needs_mount(self) -> bool:
+        return bool(self.to_mount)
+
+
+def resolve_dependencies(
+    *,
+    fs: FileSystemLike,
+    manifest: InstanceManifest,
+    docker: DockerLike,
+    targets: list[str],
+    catalog: dict[str, TestedModule],
+) -> DepResolution:
+    """Resolve OCA dependencies of `targets` against core, mounts and the catalog.
+
+    - a dependency that Odoo core provides (verified by listing the web container's
+      core addons dir) is satisfied;
+    - a dependency already provided by the local addons or a mounted repo is satisfied
+      and its own manifest deps are walked further;
+    - a dependency provided by an UNMOUNTED repo per the central catalog
+      (tested.toml entries carry repo + branch + deps) is reported in `to_mount`;
+    - anything else is `unresolved` (the caller refuses or lets Odoo fail naturally).
+    """
+    core = list_core_addons(docker, manifest)
+    provided: dict[str, str] = {}
+    for record in manifest.repos:
+        for module in record.modules or discover_modules(fs, record.host_path):
+            provided.setdefault(module, record.repo)
+    for module in discover_modules(fs, manifest.dir / "addons" / "local"):
+        provided.setdefault(module, "local")
+    mounted = {r.repo for r in manifest.repos}
+
+    resolution = DepResolution(to_install=list(targets))
+    queue = list(targets)
+    seen: set[str] = set()
+    while queue:
+        name = queue.pop(0)
+        if name in seen:
+            continue
+        seen.add(name)
+        if name in core or name in provided:
+            queue.extend(module_manifest_deps(fs, manifest, name))
+            continue
+        entry = catalog.get(name)
+        if entry is None or entry.repo == "local":
+            resolution.unresolved.append(name)
+            continue
+        if entry.repo not in mounted:
+            resolution.to_mount.append((entry.repo, entry.branch, [name]))
+        for dep in entry.deps:
+            queue.append(dep)
+        if name not in resolution.to_install:
+            resolution.to_install.append(name)
+    resolution.unresolved = sorted(set(resolution.unresolved))
+    return resolution
 
 
 def module_add_plan(

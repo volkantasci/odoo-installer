@@ -95,6 +95,7 @@ class TestedModule(BaseModel):
     tested_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     db: str = ""
     log_path: str = ""
+    deps: list[str] = Field(default_factory=list)  # OCA/module deps from __manifest__.py
 
 
 class TestedRegistry(BaseModel):

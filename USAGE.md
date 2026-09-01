@@ -346,8 +346,8 @@ organization.
 #### Install / upgrade
 
 ```bash
-odoo-installer module install <name...> --db DB [--instance NAME] [--allow-untested]
-odoo-installer module upgrade <name...> --db DB [--instance NAME] [--allow-untested]
+odoo-installer module install <name...> --db DB [--instance NAME] [--allow-untested] [--resolve-deps]
+odoo-installer module upgrade <name...> --db DB [--instance NAME] [--allow-untested] [--resolve-deps]
 ```
 
 - Runs inside the `web` container:
@@ -356,6 +356,13 @@ odoo-installer module upgrade <name...> --db DB [--instance NAME] [--allow-untes
 - `--db` is **required** — there is no default database. For experiments use scratch
   names (`oitest_*`).
 - Refuses modules without a tested.toml entry unless `--allow-untested` is given.
+- **Dependency resolution:** OCA modules often depend on other OCA modules. The CLI
+  reads each target module's `__manifest__.py` deps; deps provided by Odoo core
+  (verified by listing the web container's core addons) or by already-mounted repos
+  just work. A dep whose provider repo is **not** mounted is refused with a clear
+  message — pass `--resolve-deps` to mount the provider repos automatically (per the
+  central whitelist catalog, which records each approved module's repo + deps) and
+  include the deps in the install.
 - Verifies the resulting `ir_module_module` states afterwards and exits 1 if any module
   is not in `installed` state.
 

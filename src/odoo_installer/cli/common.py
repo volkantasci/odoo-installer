@@ -6,6 +6,7 @@ from odoo_installer.cli import deps
 from odoo_installer.config import load_registry, record_tested_module
 from odoo_installer.constants import ODOO_VERSION
 from odoo_installer.core.instances import load_manifest
+from odoo_installer.core.modules import module_manifest_deps
 from odoo_installer.core.tester import TestOutcome
 from odoo_installer.exceptions import StackError
 from odoo_installer.schemas import InstanceManifest, TestedModule
@@ -46,6 +47,7 @@ def record_tested_pass(
             commit=repo_record.commit if repo_record else "",
             db=outcome.db,
             log_path=str(outcome.log_path) if outcome.log_path else "",
+            deps=module_manifest_deps(container.fs, manifest, module),
         ),
         path=container.tested_path,
     )
@@ -72,6 +74,7 @@ def record_approved(
             commit=repo_record.commit if repo_record else "",
             db=db,
             log_path="",
+            deps=module_manifest_deps(container.fs, manifest, module),
         ),
         path=container.tested_path,
     )

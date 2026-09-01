@@ -353,8 +353,8 @@ arama yapar.
 #### Kur / yükselt
 
 ```bash
-odoo-installer module install <ad...> --db DB [--instance AD] [--allow-untested]
-odoo-installer module upgrade <ad...> --db DB [--instance AD] [--allow-untested]
+odoo-installer module install <ad...> --db DB [--instance AD] [--allow-untested] [--resolve-deps]
+odoo-installer module upgrade <ad...> --db DB [--instance AD] [--allow-untested] [--resolve-deps]
 ```
 
 - `web` konteynerinin içinde çalışır:
@@ -363,6 +363,13 @@ odoo-installer module upgrade <ad...> --db DB [--instance AD] [--allow-untested]
 - `--db` **zorunludur** — varsayılan veritabanı yoktur. Denemeler için scratch adlarını
   (`oitest_*`) kullanın.
 - tested.toml kaydı olmayan modülleri `--allow-untested` vermediğiniz sürece reddeder.
+- **Bağımlılık çözümleme:** OCA modülleri sıkça başka OCA modüllerine bağımlıdır. CLI
+  her hedef modülün `__manifest__.py` bağımlılıklarını okur; Odoo core'unun sağladığı
+  (web konteynerinin core addons dizini listelenerek doğrulanır) veya zaten mount
+  edilmiş repoların sağladığı bağımlılıklar sorunsuz geçer. Sağlayıcı reposu **mount
+  edilmemiş** bir bağımlılık, net bir mesajla reddedilir — `--resolve-deps` verildiğinde
+  sağlayıcı repolar otomatik mount edilir (merkezi whitelist kataloğu her onaylı
+  modülün reposunu + bağımlılıklarını kaydeder) ve bağımlılıklar kurulum listesine eklenir.
 - Sonrasında `ir_module_module` durumlarını doğrular; `installed` durumunda olmayan
   modül varsa 1 koduyla çıkar.
 

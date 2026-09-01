@@ -34,12 +34,15 @@ from odoo_installer.core.dbms import execute_sql, module_states
 from odoo_installer.core.modules import (
     available_modules,
     module_add_plan,
+    module_manifest_deps,
     module_remove_plan,
+    resolve_dependencies,
 )
 from odoo_installer.core.plan import apply_steps
 from odoo_installer.core.runner import install_modules
 from odoo_installer.core.tester import drop_scratch_db, run_module_test
 from odoo_installer.exceptions import OdooInstallerError
+from odoo_installer.schemas import InstanceManifest, TestedModule
 
 app = typer.Typer(no_args_is_help=True, help="Manage OCA repos and Odoo modules.")
 
@@ -212,6 +215,7 @@ def _run_modules(
     instance: str | None,
     upgrade: bool,
     allow_untested: bool = False,
+    resolve_deps: bool = False,
 ) -> None:
     container = deps.build()
     try:
@@ -223,6 +227,54 @@ def _run_modules(
                 f"modules not visible to this instance: {', '.join(missing)}; "
                 "run 'module add' first"
             )
+
+        # dependency resolution: extend the module list with resolvable OCA deps and,
+        # with --resolve-deps, mount the provider repos they live in
+        catalog = load_tested_registry(container.tested_path).modules
+        if not resolve_deps:
+            cheap = _catalog_clash(container, manifest, modules, available, catalog)
+            if cheap:
+                raise OdooInstallerError(
+                    "missing OCA dependencies need mounting: "
+                    + "; ".join(f"{dep} <- {repo} (provides {dep})" for dep, repo in cheap)
+                    + " — re-run with --resolve-deps to mount them automatically"
+                )
+        else:
+            resolution = resolve_dependencies(
+                fs=container.fs,
+                manifest=manifest,
+                docker=container.docker,
+                targets=modules,
+                catalog=catalog,
+            )
+            if resolution.unresolved:
+                raise OdooInstallerError(
+                    "unresolvable dependencies (not core, not mounted, not in the "
+                    f"whitelist catalog): {', '.join(resolution.unresolved)} — try "
+                    "'module search' to find the providing repo"
+                )
+            for repo_full, branch, dep_modules in resolution.to_mount:
+                add_plan = module_add_plan(
+                    config=container.config,
+                    manifest=manifest,
+                    repo_arg=repo_full,
+                    modules_opt=dep_modules,
+                    sparse=True,
+                    fork=None,
+                    existing_repo=None,
+                    github=container.github,
+                    git=container.git,
+                    fs=container.fs,
+                    docker=container.docker,
+                )
+                console.print(
+                    f"[bold]resolving dependency[/bold] {repo_full} @ {branch} "
+                    f"(provides {', '.join(dep_modules)})"
+                )
+                apply_steps(add_plan.steps, on_step=progress_reporter())
+                manifest = resolve_instance(container, instance)
+            modules = resolution.to_install
+
         untested = [m for m in modules if get_tested_module(m, path=container.tested_path) is None]
         if untested and not allow_untested:
             raise OdooInstallerError(
@@ -262,6 +314,28 @@ def _run_modules(
     console.print(f"[green]✔[/green] {verb}: {', '.join(modules)}")
 
 
+def _catalog_clash(
+    container: deps.Container,
+    manifest: InstanceManifest,
+    modules: list[str],
+    available: dict[str, str],
+    catalog: dict[str, TestedModule],
+) -> list[tuple[str, str]]:
+    """Cheap (no docker) pre-check: targets whose deps are catalog-known OCA modules
+    that are NOT provided locally. Returns (dep, providing_repo) pairs."""
+    missing: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for target in modules:
+        for dep in module_manifest_deps(container.fs, manifest, target):
+            if dep in available or dep in seen:
+                continue
+            entry = catalog.get(dep)
+            if entry is not None and entry.repo != "local":
+                missing.append((dep, entry.repo))
+                seen.add(dep)
+    return missing
+
+
 @app.command("install")
 def install(
     modules: Annotated[list[str], typer.Argument(help="Module names.")],
@@ -275,9 +349,24 @@ def install(
             help="Skip the tested-addons whitelist check (whitelist: tested.toml).",
         ),
     ] = False,
+    resolve_deps: Annotated[
+        bool,
+        typer.Option(
+            "--resolve-deps",
+            help="Mount unmounted OCA repos that provide missing dependencies "
+            "(per the whitelist catalog) and include the deps in the install.",
+        ),
+    ] = False,
 ) -> None:
     """Install modules into an explicit database (odoo -i, scratch DBs recommended)."""
-    _run_modules(modules, db=db, instance=instance, upgrade=False, allow_untested=allow_untested)
+    _run_modules(
+        modules,
+        db=db,
+        instance=instance,
+        upgrade=False,
+        allow_untested=allow_untested,
+        resolve_deps=resolve_deps,
+    )
 
 
 @app.command("upgrade")
@@ -293,9 +382,24 @@ def upgrade(
             help="Skip the tested-addons whitelist check (whitelist: tested.toml).",
         ),
     ] = False,
+    resolve_deps: Annotated[
+        bool,
+        typer.Option(
+            "--resolve-deps",
+            help="Mount unmounted OCA repos that provide missing dependencies "
+            "(per the whitelist catalog) and include the deps in the upgrade.",
+        ),
+    ] = False,
 ) -> None:
     """Upgrade modules in an explicit database (odoo -u)."""
-    _run_modules(modules, db=db, instance=instance, upgrade=True, allow_untested=allow_untested)
+    _run_modules(
+        modules,
+        db=db,
+        instance=instance,
+        upgrade=True,
+        allow_untested=allow_untested,
+        resolve_deps=resolve_deps,
+    )
 
 
 @app.command("remove")

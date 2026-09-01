@@ -334,3 +334,122 @@ def test_module_approve_refuses_invisible_module(patch_deps, tmp_path: Path) -> 
     result = runner.invoke(app, ["module", "approve", "ghost_module", "--db", "dev"])
     assert result.exit_code == 1
     assert "not visible" in result.output
+
+
+def test_module_install_resolve_deps_mounts_provider(patch_deps, tmp_path: Path) -> None:
+    import tomli_w
+
+    class DepGit(FakeGit):
+        """server_util_foo's manifest declares a dep on web_dark_mode (OCA/web)."""
+
+        def clone(self, url: str, path, branch=None, depth=None) -> str:
+            note = super().clone(url, path, branch=branch, depth=depth)
+            target = Path(path)
+            if url.endswith("/OCA/web.git"):
+                mod = target / "web_dark_mode"
+                mod.mkdir(parents=True, exist_ok=True)
+                (mod / "__manifest__.py").write_text(
+                    '{"name": "web_dark_mode", "depends": []}', encoding="utf-8"
+                )
+            else:
+                mod = target / "server_util_foo"
+                mod.mkdir(parents=True, exist_ok=True)
+                (mod / "__manifest__.py").write_text(
+                    '{"name": "server_util_foo", "depends": ["base", "web_dark_mode"]}',
+                    encoding="utf-8",
+                )
+            return note
+
+    container = make_container(tmp_path, docker=FakeDocker())
+    container.git = DepGit(sample_modules=("server_util_foo",))
+    patch_deps(container)
+    runner.invoke(app, ["instance", "create", "dev", "--apply"])
+    runner.invoke(app, ["module", "add", "server-utils", "--apply"])
+    # central catalog: the dep module is approved, provided by OCA/web
+    catalog = {
+        "server_util_foo": {
+            "name": "server_util_foo",
+            "repo": "OCA/server-utils",
+            "branch": "19.0",
+            "commit": "abc1234def5678",
+            "tested_at": "2026-09-01T10:00:00Z",
+            "db": "dev",
+            "log_path": "",
+            "deps": ["web_dark_mode"],
+        },
+        "web_dark_mode": {
+            "name": "web_dark_mode",
+            "repo": "OCA/web",
+            "branch": "19.0",
+            "commit": "d4bfccf526ab7519de75db4e8d9dd3d247cf45d5",
+            "tested_at": "2026-09-01T10:00:00Z",
+            "db": "odoo",
+            "log_path": "",
+            "deps": [],
+        },
+    }
+    (container.tested_path).write_text(tomli_w.dumps({"modules": catalog}), encoding="utf-8")
+
+    without = runner.invoke(app, ["module", "install", "server_util_foo", "--db", "dev"])
+    assert without.exit_code == 1
+    assert "missing OCA dependencies need mounting" in without.output
+    assert "OCA/web" in without.output
+
+    container.docker.compose_results = [
+        "base\nweb\nmail\nproduct\n",  # core addons listing for the resolver
+        "",  # module add: compose config pre-validation
+        "",  # module add: compose config post-validation
+        "",  # module add: recreate web (up -d)
+        "install ok\n",  # odoo -i run
+        "server_util_foo|installed\nweb_dark_mode|installed\n",
+    ]
+    result = runner.invoke(
+        app, ["module", "install", "server_util_foo", "--db", "dev", "--resolve-deps"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "resolving dependency" in result.output
+    assert "OCA/web" in result.output
+    manifest = tmp_path / "instances" / "dev" / ".odoo-installer.json"
+    assert "OCA/web" in manifest.read_text(encoding="utf-8")
+    assert "/mnt/oca/web" in (tmp_path / "instances" / "dev" / "docker-compose.yml").read_text(
+        encoding="utf-8"
+    )
+    install_calls = [
+        " ".join(args) for args, _ in container.docker.compose_calls if args[0] == "exec"
+    ]
+    assert any("-i server_util_foo,web_dark_mode" in call for call in install_calls)
+
+
+def test_module_install_without_resolver_lets_core_deps_pass(patch_deps, tmp_path: Path) -> None:
+    class CoreDepGit(FakeGit):
+        def clone(self, url: str, path, branch=None, depth=None) -> str:
+            note = super().clone(url, path, branch=branch, depth=depth)
+            (Path(path) / "server_util_foo" / "__manifest__.py").write_text(
+                '{"name": "server_util_foo", "depends": ["base", "product"]}',
+                encoding="utf-8",
+            )
+            return note
+
+    container = make_container(tmp_path, docker=FakeDocker())
+    container.git = CoreDepGit(sample_modules=("server_util_foo",))
+    patch_deps(container)
+    runner.invoke(app, ["instance", "create", "dev", "--apply"])
+    runner.invoke(app, ["module", "add", "server-utils", "--apply"])
+    import tomli_w
+
+    entry = {
+        "name": "server_util_foo",
+        "repo": "OCA/server-utils",
+        "branch": "19.0",
+        "commit": "abc1234def5678",
+        "tested_at": "2026-09-01T10:00:00Z",
+        "db": "dev",
+        "log_path": "",
+        "deps": ["base", "product"],
+    }
+    (container.tested_path).write_text(
+        tomli_w.dumps({"modules": {"server_util_foo": entry}}), encoding="utf-8"
+    )
+    container.docker.compose_results = ["install ok\n", "server_util_foo|installed\n"]
+    result = runner.invoke(app, ["module", "install", "server_util_foo", "--db", "dev"])
+    assert result.exit_code == 0, result.output  # core deps never block the cheap check
