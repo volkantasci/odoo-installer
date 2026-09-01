@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-09-01
+
+### Added
+
+- `module approve <name...> --db DB [--instance NAME]`: whitelist modules whose
+  quality is already proven on a running stack. Refuses anything that is not in
+  `installed` state in the explicit database (verified via `ir_module_module` before
+  anything is written), then records the entries in `tested.toml` — no test log
+  required.
+- Central whitelist repo: new config key `tested_repo_url` and
+  `odoo-installer test pull [--apply]`. The pull refreshes a local cache clone of a
+  small git repo whose root holds a `tested.toml` and merges its entries into the
+  active whitelist — union by module name, newer `tested_at` wins. Approvals made on
+  any machine (test PASSes or `module approve`) spread to every machine that pulls;
+  the CLI itself does not need updating for new approvals, only the repo does.
+
 ## [0.3.2] - 2026-09-01
 
 ### Fixed
