@@ -64,7 +64,11 @@ odoo-installer instance adopt <dir>
 odoo-installer module add <oca-repo> [--modules m1,m2] [--sparse] [--repo PATH] [--apply]
     Clone OCA/<repo> at the branch matching 19.0, mount it into the stack, rewrite
     addons_path, recreate web (`up -d`; a plain restart would not mount the new
-    volume). --repo mounts an existing local checkout instead of cloning.
+    volume). --repo mounts an existing local checkout instead of cloning. With
+    --modules, the plan verifies and SHOWS each module's dependencies (read from
+    GitHub raw manifests): core / same-repo / other-repo / already-available — and
+    same-repo siblings join the sparse clone so the later install cannot fail with
+    "module not found".
 odoo-installer module list [--instance NAME] [--json]
 odoo-installer module search <query>
     GitHub API: find OCA repos and the modules they contain for 19.0.

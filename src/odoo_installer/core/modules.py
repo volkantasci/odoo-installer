@@ -39,6 +39,111 @@ CONTAINER_MOUNT_PREFIX = "/mnt/oca"
 
 
 @dataclass
+class ModuleDepReport:
+    """Dependency classification of the requested modules (shown in the plan).
+
+    Buckets: `core` (verified from the web container when it is up; `core_verified`
+    tells whether that listing succeeded), `same_repo` (siblings that MUST join the
+    sparse clone), `other_repo` (dep, provider-repo — mounted later by
+    `module install --resolve-deps`), `available` (already provided by the instance),
+    `unknown` (provider cannot be determined).
+    """
+
+    requested: list[str]
+    core: set[str] = field(default_factory=set)
+    core_verified: bool = False
+    same_repo: list[str] = field(default_factory=list)
+    other_repo: list[tuple[str, str]] = field(default_factory=list)
+    available: set[str] = field(default_factory=set)
+    unknown: list[str] = field(default_factory=list)
+    raw: dict[str, list[str]] = field(default_factory=dict)
+
+    @property
+    def step_description(self) -> str:
+        parts: list[str] = []
+        if self.core:
+            parts.append(f"core: {', '.join(sorted(self.core))}")
+        if self.same_repo:
+            parts.append(f"same-repo: {', '.join(sorted(self.same_repo))}")
+        if self.other_repo:
+            parts.append(
+                "other repos (mounted by install --resolve-deps): "
+                + ", ".join(f"{dep} <- {repo}" for dep, repo in sorted(self.other_repo))
+            )
+        if self.available:
+            parts.append(f"already available: {', '.join(sorted(self.available))}")
+        if self.unknown:
+            label = (
+                "core or unknown (container offline)"
+                if not self.core_verified
+                else "unknown provider"
+            )
+            parts.append(f"{label}: {', '.join(sorted(self.unknown))}")
+        head = f"verify dependencies of {', '.join(self.requested)}"
+        return f"{head} ({'; '.join(parts)})" if parts else f"{head} (no dependencies found)"
+
+    @property
+    def summary(self) -> str:
+        bits = [
+            f"{len(self.core)} core",
+            f"{len(self.same_repo)} same-repo",
+            f"{len(self.other_repo)} other-repo",
+        ]
+        if self.unknown:
+            bits.append(f"{len(self.unknown)} unknown")
+        return "dependencies: " + ", ".join(bits) + " — 0 unmet"
+
+
+def _resolve_requested_module_deps(
+    *,
+    owner: str,
+    name: str,
+    branch: str,
+    modules_opt: list[str] | None,
+    manifest: InstanceManifest,
+    fs: FileSystemLike,
+    github: GitHubLike,
+    docker: DockerLike,
+    catalog: dict[str, TestedModule] | None,
+) -> ModuleDepReport:
+    """Classify every dependency of the requested modules (raw GitHub manifests)."""
+    report = ModuleDepReport(requested=list(modules_opt or []))
+    if not modules_opt:
+        return report  # whole-repo add: everything ships with the clone
+
+    core = list_core_addons(docker, manifest)
+    report.core = set(core)
+    report.core_verified = bool(core)
+
+    provided: set[str] = set()
+    for record in manifest.repos:
+        provided.update(record.modules or [])
+    provided.update(discover_modules(fs, manifest.dir / "addons" / "local"))
+    report.available = set()
+
+    for module in modules_opt:
+        text = github.fetch_module_manifest(owner, name, branch, module)
+        deps = parse_manifest_deps(text) if text is not None else []
+        report.raw[module] = deps
+        for dep in deps:
+            if dep in core:
+                report.core.add(dep)
+            elif dep in provided:
+                report.available.add(dep)
+            elif dep in report.requested or dep in report.same_repo:
+                report.same_repo.append(dep)
+            else:
+                entry = (catalog or {}).get(dep)
+                if entry is not None and entry.repo not in ("local", f"{owner}/{name}"):
+                    report.other_repo.append((dep, entry.repo))
+                elif github.fetch_module_manifest(owner, name, branch, dep) is not None:
+                    report.same_repo.append(dep)  # sibling living in the same repo
+                else:
+                    report.unknown.append(dep)
+    return report
+
+
+@dataclass
 class ModulePlan:
     repo: str  # "OCA/<name>"
     name: str
@@ -89,28 +194,33 @@ def available_modules(fs: FileSystemLike, manifest: InstanceManifest) -> dict[st
     return found
 
 
-def read_manifest_deps(fs: FileSystemLike, module_dir: Path) -> list[str]:
-    """Read `depends` from a module's __manifest__.py; [] when unreadable.
+def parse_manifest_deps(text: str) -> list[str]:
+    """Extract `depends` from a __manifest__.py text; [] when unparsable.
 
     Best effort by design: the manifest is normally a Python literal (ast-parsed);
     exotic manifests fall back to a regex; a total failure never blocks the caller —
     Odoo itself re-checks dependencies at install time.
     """
-    raw = fs.read_text(module_dir / MANIFEST_FILE)
-    if raw is None:
-        return []
     try:
         import ast
 
-        data = ast.literal_eval(raw)
+        data = ast.literal_eval(text)
         if isinstance(data, dict):
             return [str(dep) for dep in data.get("depends", [])]
     except (ValueError, SyntaxError):
         pass
-    match = re.search(r"['\"]depends['\"]\s*:\s*\[([^\]]*)\]", raw, re.S)
+    match = re.search(r"['\"]depends['\"]\s*:\s*\[([^\]]*)\]", text, re.S)
     if not match:
         return []
     return re.findall(r"['\"]([\w.]+)['\"]", match.group(1))
+
+
+def read_manifest_deps(fs: FileSystemLike, module_dir: Path) -> list[str]:
+    """Read `depends` from a module's __manifest__.py on disk; [] when unreadable."""
+    raw = fs.read_text(module_dir / MANIFEST_FILE)
+    if raw is None:
+        return []
+    return parse_manifest_deps(raw)
 
 
 def module_manifest_deps(fs: FileSystemLike, manifest: InstanceManifest, module: str) -> list[str]:
@@ -477,10 +587,31 @@ def module_add_plan(
     # re-add with one new module would silently delete every other module's files
     # from the clone while they stay "installed" in the DB — the broken-assets bug.
     previous_record = next((r for r in manifest.repos if r.repo.split("/")[-1] == name), None)
+
+    # dependency visibility: read the requested modules' manifests from GitHub raw
+    # (no clone needed) and classify every dependency so the plan SHOWS them and the
+    # sparse clone includes same-repo siblings (an unmounted sibling would make the
+    # install fail with "module not found").
+    dep_report = _resolve_requested_module_deps(
+        owner=owner,
+        name=name,
+        branch=branch,
+        modules_opt=modules_opt,
+        manifest=manifest,
+        fs=fs,
+        github=github,
+        docker=docker,
+        catalog=catalog,
+    )
+
     sparse_modules: list[str] | None = None
     if sparse and modules_opt:
         sparse_modules = list(
-            dict.fromkeys((previous_record.modules if previous_record else []) + modules_opt)
+            dict.fromkeys(
+                (previous_record.modules if previous_record else [])
+                + modules_opt
+                + dep_report.same_repo
+            )
         )
 
     def sync_clone() -> str:
@@ -543,6 +674,33 @@ def module_add_plan(
         return shown if len(shown) <= 160 else f"{len(found)} modules"
 
     steps.append(Step(description=f"discover modules in {full}", run=discover))
+
+    def verify_deps() -> str:
+        """Re-check dependencies against the real manifests in the clone."""
+        unmet: list[str] = []
+        for module in modules_opt or []:
+            for dep in read_manifest_deps(fs, host_path / module):
+                if dep in dep_report.core or dep in dep_report.same_repo:
+                    continue
+                if dep in dep_report.available:
+                    continue
+                if any(dep == d for d, _provider in dep_report.other_repo):
+                    continue  # install --resolve-deps mounts the provider
+                if fs.exists(host_path / dep / MANIFEST_FILE):
+                    continue  # sparse materialized it
+                if not dep_report.core_verified:
+                    continue  # container was down: Odoo verifies at install time
+                unmet.append(f"{module} → {dep}")
+        if unmet:
+            raise StackError(
+                "unmet dependencies: "
+                + ", ".join(sorted(set(unmet)))
+                + " — mount their provider repos ('module search') or use "
+                "'module install --resolve-deps'"
+            )
+        return dep_report.summary
+
+    steps.append(Step(description=dep_report.step_description, run=verify_deps))
 
     compose_path = manifest.dir / COMPOSE_NAME
     compose_content = fs.read_text(compose_path)

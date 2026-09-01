@@ -364,6 +364,13 @@ odoo-installer module upgrade <ad...> --db DB [--instance AD] [--allow-untested]
 - `--db` **zorunludur** — varsayılan veritabanı yoktur. Denemeler için scratch adlarını
   (`oitest_*`) kullanın.
 - tested.toml kaydı olmayan modülleri `--allow-untested` vermediğiniz sürece reddeder.
+- **Bağımlılıklar dry-run'da görünür:** `--modules m1,m2` verildiğinde plan, her
+  modülün bağımlılıklarını (GitHub raw manifest'lerinden okunur, klon gerekmez)
+  doğrular ve sınıflandırır: core (çalışan konteynerden doğrulanır), aynı-repo
+  kardeşler (otomatik olarak sparse klona dahil edilir), diğer-repo
+  (`install --resolve-deps` tarafından mount edilir, sağlayıcı planda yazar) ve
+  zaten-mevcut. Aynı-repo kardeşler her zaman sparse klona katılır; sonraki kurulum
+  "module not found" ile düşemez.
 - **Bağımlılık çözümleme:** OCA modülleri sıkça başka OCA modüllerine bağımlıdır. CLI
   her hedef modülün `__manifest__.py` bağımlılıklarını okur; Odoo core'unun sağladığı
   (web konteynerinin core addons dizini listelenerek doğrulanır) veya zaten mount

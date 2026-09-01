@@ -358,6 +358,13 @@ odoo-installer module upgrade <name...> --db DB [--instance NAME] [--allow-untes
 - `--db` is **required** — there is no default database. For experiments use scratch
   names (`oitest_*`).
 - Refuses modules without a tested.toml entry unless `--allow-untested` is given.
+- **Dependencies are visible in the dry-run:** for `--modules m1,m2`, the plan
+  verifies each module's dependencies (read from GitHub raw manifests, no clone
+  needed) and classifies them: core (verified against the running container),
+  same-repo siblings (included in the sparse clone automatically), other-repo
+  (mounted later by `install --resolve-deps`, provider named in the plan), and
+  already-available. Same-repo siblings always join the sparse clone, so the later
+  install cannot fail with "module not found".
 - **Dependency resolution:** OCA modules often depend on other OCA modules. The CLI
   reads each target module's `__manifest__.py` deps; deps provided by Odoo core
   (verified by listing the web container's core addons) or by already-mounted repos

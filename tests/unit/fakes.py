@@ -150,9 +150,16 @@ class FakeSystem:
 
 
 class FakeGitHub:
-    def __init__(self, *, branch_exists: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        branch_exists: bool = True,
+        module_manifests: dict[str, str] | None = None,
+    ) -> None:
         self._branch_exists = branch_exists
+        self._module_manifests = module_manifests or {}
         self.branch_checks: list[tuple[str, str]] = []
+        self.manifest_fetches: list[tuple[str, str, str, str]] = []
 
     def ping(self) -> str:
         return "api.github.com reachable (4999 core requests left, unauthenticated)"
@@ -160,6 +167,10 @@ class FakeGitHub:
     def branch_exists(self, repo: str, branch: str) -> bool:
         self.branch_checks.append((repo, branch))
         return self._branch_exists
+
+    def fetch_module_manifest(self, owner: str, repo: str, branch: str, module: str) -> str | None:
+        self.manifest_fetches.append((owner, repo, branch, module))
+        return self._module_manifests.get(module)
 
     def search_repos(self, query: str, limit: int = 10) -> list[RepoSummary]:
         return []

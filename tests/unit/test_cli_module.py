@@ -396,7 +396,8 @@ def test_module_install_resolve_deps_mounts_provider(patch_deps, tmp_path: Path)
     assert "OCA/web" in without.output
 
     container.docker.compose_results = [
-        "base\nweb\nmail\nproduct\n",  # core addons listing for the resolver
+        "base\nweb\nmail\nproduct\n",  # core addons listing (pre-mount resolver)
+        "base\nweb\nmail\nproduct\n",  # core addons listing (dep report in module add)
         "",  # module add: compose config pre-validation
         "",  # module add: compose config post-validation
         "",  # module add: recreate web (up -d)

@@ -17,6 +17,9 @@ class GitHubLike(Protocol):
     def ping(self) -> str: ...
     def branch_exists(self, repo: str, branch: str) -> bool: ...
     def search_repos(self, query: str, limit: int = 10) -> list[RepoSummary]: ...
+    def fetch_module_manifest(
+        self, owner: str, repo: str, branch: str, module: str
+    ) -> str | None: ...
 
 
 class GitHubAdapter:
@@ -49,6 +52,26 @@ class GitHubAdapter:
         if response.status_code == 404:
             return False
         raise GitHubError(f"cannot check branch {branch!r} of {repo}: HTTP {response.status_code}")
+
+    def fetch_module_manifest(self, owner: str, repo: str, branch: str, module: str) -> str | None:
+        """Fetch `<module>/__manifest__.py` content from raw.githubusercontent.com.
+
+        Returns the file text, or None when it does not exist (404) — used to read
+        module dependencies before/without cloning. Network failures raise
+        GitHubError; a 404 is a normal "not present" answer, not an error.
+        """
+        url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/{module}/__manifest__.py"
+        try:
+            response = httpx.get(url, headers=self._headers(), timeout=self._timeout)
+        except httpx.HTTPError as exc:
+            raise GitHubError(f"cannot fetch manifest of {owner}/{repo}/{module}: {exc}") from exc
+        if response.status_code == 200:
+            return response.text
+        if response.status_code == 404:
+            return None
+        raise GitHubError(
+            f"cannot fetch manifest of {owner}/{repo}/{module}: HTTP {response.status_code}"
+        )
 
     def search_repos(self, query: str, limit: int = 10) -> list[RepoSummary]:
         from urllib.parse import quote
