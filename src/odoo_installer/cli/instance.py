@@ -17,6 +17,7 @@ from odoo_installer.core.instances import (
     create_instance_plan,
     detect_stack,
     instance_dir,
+    instance_secret,
     load_manifest,
     remove_instance_plan,
     resolve_create_port,
@@ -191,6 +192,29 @@ def remove(
         raise typer.Exit(code=1) from None
     render_results(steps, notes)
     console.print(f"[green]✔[/green] instance {name!r} removed")
+
+
+@app.command("secret")
+def secret(
+    name: str,
+    *,
+    key: Annotated[
+        str,
+        typer.Option(
+            "--key",
+            help="Env key to print (default: ADMIN_PASSWD, the Odoo master password).",
+        ),
+    ] = "ADMIN_PASSWD",
+) -> None:
+    """Print an instance secret from .env (default: the Odoo master password)."""
+    container = deps.build()
+    try:
+        stack_dir = _stack_dir_for(container, name)
+        value = instance_secret(container.fs, stack_dir, key)
+    except OdooInstallerError as exc:
+        error(str(exc))
+        raise typer.Exit(code=1) from None
+    typer.echo(value)
 
 
 def _stack_dir_for(container: deps.Container, name: str) -> Path:

@@ -58,7 +58,7 @@ odoo-installer config show|set|edit       # global configuration (config.toml)
 odoo-installer install [--apply]          # host prerequisites (docker, compose, git); plan-first
 odoo-installer instance create <name> [--apply]   # new Odoo stack (dry-run by default)
 odoo-installer instance adopt <dir> [--apply]     # manage an existing compose stack (read-mostly)
-odoo-installer instance list|show|start|stop|restart|remove
+odoo-installer instance list|show|secret|start|stop|restart|remove
 odoo-installer db list|create|drop|reset          # drop/reset need --apply --yes
 odoo-installer module add <oca-repo> [--modules m1,m2] [--sparse] [--repo PATH] [--apply]
 odoo-installer module list [--instance NAME] [--json] | search <query>

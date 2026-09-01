@@ -111,6 +111,25 @@ def load_manifest(fs: FileSystemLike, stack_dir: Path) -> InstanceManifest | Non
         raise StackError(f"corrupt instance manifest in {stack_dir}: {exc}") from exc
 
 
+def instance_secret(fs: FileSystemLike, stack_dir: Path, key: str = "ADMIN_PASSWD") -> str:
+    """Read one secret from the instance's .env (default: the Odoo master password).
+
+    Raises StackError when the instance has no .env or the key is absent — never
+    guesses or falls back to odoo.conf, so the printed value is always the one the
+    stack actually runs with.
+    """
+    env_path = stack_dir / ENV_NAME
+    raw = fs.read_text(env_path)
+    if raw is None:
+        raise StackError(f"no {ENV_NAME} in {stack_dir} (instance not created by this CLI?)")
+    values = parse_env(raw)
+    if key not in values:
+        raise StackError(
+            f"{key!r} not found in {env_path}; available keys: {', '.join(sorted(values))}"
+        )
+    return values[key]
+
+
 def save_manifest(fs: FileSystemLike, manifest: InstanceManifest) -> None:
     fs.write_text(manifest.dir / MANIFEST_NAME, manifest.model_dump_json(indent=2) + "\n")
 

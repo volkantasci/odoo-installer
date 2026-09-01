@@ -220,15 +220,21 @@ $ odoo-installer instance create dev --apply    # uygular
 ✔ instance 'dev' hazır: http://localhost:8069
 ```
 
-#### Listele / göster / yaşam döngüsü
+#### Listele / göster / secret / yaşam döngüsü
 
 ```bash
 odoo-installer instance list
 odoo-installer instance show <ad>        # manifest ayrıntıları + docker compose ps
+odoo-installer instance secret <ad> [--key ANAHTAR]   # .env'den bir sır yazdırır
 odoo-installer instance start <ad>       # oluşturulan: up -d · sahiplenilen: compose start
 odoo-installer instance stop <ad>        # docker compose stop
 odoo-installer instance restart <ad>     # docker compose restart
 ```
+
+`secret`, instance'ın `.env`'inden tek bir değeri kendi satırında (düz metin, pipe'a
+uygun) yazdırır. Varsayılan anahtar `ADMIN_PASSWD` — Odoo master password'ü;
+`POSTGRES_PASSWORD` gibi diğer anahtarlar `--key` ile okunur. Olmayan anahtar, uygun
+anahtarları listeleyen açık bir hatadır.
 
 #### Silme
 
@@ -574,9 +580,11 @@ değişkenlerini ayarlar, imajın varsayılan config'inde `admin_passwd` yorum s
 ve Odoo formu sunucu tarafında asla ön-doldurmaz. Dolu görünen alan, tarayıcınızın
 kaydettiği şifrenin autofill'idir. `instance create` rastgele bir master password
 üretir ve `<stack>/.env` (`ADMIN_PASSWD=...`) ile `<stack>/config/odoo.conf`
-(`admin_passwd = ...`) dosyalarına yazar. İkisinden birindeki değeri kullanın. Kendi
-şifrenizi belirlemek için `config/odoo.conf` içindeki `admin_passwd`'i (tutarlılık için
-`.env`'i de) düzenleyip `odoo-installer instance restart <ad>` çalıştırın.
+(`admin_passwd = ...`) dosyalarına yazar. CLI ile okuyun:
+`odoo-installer instance secret <ad>` (DB şifresi için `--key POSTGRES_PASSWORD`).
+Kendi şifrenizi belirlemek için `config/odoo.conf` içindeki `admin_passwd`'i
+(tutarlılık için `.env`'i de) düzenleyip `odoo-installer instance restart <ad>`
+çalıştırın.
 
 **İki instance aynı portu (8069) istiyor.**
 Otomatik port atama, *o an* boş olan ilk portu seçer — durdurulmuş bir stack portunu

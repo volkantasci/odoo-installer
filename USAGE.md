@@ -216,15 +216,21 @@ $ odoo-installer instance create dev --apply    # execute
 ✔ instance 'dev' ready at http://localhost:8069
 ```
 
-#### List / show / lifecycle
+#### List / show / secret / lifecycle
 
 ```bash
 odoo-installer instance list
 odoo-installer instance show <name>       # manifest details + docker compose ps
+odoo-installer instance secret <name> [--key KEY]   # print a .env secret
 odoo-installer instance start <name>      # created: up -d · adopted: compose start
 odoo-installer instance stop <name>       # docker compose stop
 odoo-installer instance restart <name>    # docker compose restart
 ```
+
+`secret` prints one value from the instance's `.env` on its own line (plain text, so it
+pipes cleanly). The default key is `ADMIN_PASSWD` — the Odoo master password; other
+keys such as `POSTGRES_PASSWORD` work with `--key`. A missing key is a hard error that
+lists the available keys.
 
 #### Remove
 
@@ -563,9 +569,10 @@ connection vars, and the shipped default config has `admin_passwd` commented out
 Odoo never pre-fills the form server-side. What looks like a pre-filled field is your
 browser's saved-password autofill. `instance create` generates a random master password
 and stores it in `<stack>/.env` (`ADMIN_PASSWD=...`) and in
-`<stack>/config/odoo.conf` (`admin_passwd = ...`). Use the value from either file. To
-set your own, edit `admin_passwd` in `config/odoo.conf` (and `.env` for consistency)
-and run `odoo-installer instance restart <name>`.
+`<stack>/config/odoo.conf` (`admin_passwd = ...`). Read it with the CLI:
+`odoo-installer instance secret <name>` (or `--key POSTGRES_PASSWORD` for the DB
+password). To set your own, edit `admin_passwd` in `config/odoo.conf` (and `.env` for
+consistency) and run `odoo-installer instance restart <name>`.
 
 **Two instances want the same port (8069).**
 Port auto-allocation picks the first port that is free *right now* — a stopped stack

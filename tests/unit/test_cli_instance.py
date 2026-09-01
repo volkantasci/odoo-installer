@@ -141,6 +141,33 @@ def test_show_unknown_instance_fails(patch_deps, tmp_path: Path) -> None:
     assert result.exit_code == 1
 
 
+def test_secret_prints_master_password(patch_deps, tmp_path: Path) -> None:
+    patch_deps(make_container(tmp_path))
+    runner.invoke(app, ["instance", "create", "dev", "--apply"])
+    result = runner.invoke(app, ["instance", "secret", "dev"])
+    assert result.exit_code == 0
+    value = result.output.strip()
+    assert len(value) >= 16  # generated master password
+    env_text = (tmp_path / "instances" / "dev" / ".env").read_text(encoding="utf-8")
+    assert value in env_text
+
+
+def test_secret_custom_key(patch_deps, tmp_path: Path) -> None:
+    patch_deps(make_container(tmp_path))
+    runner.invoke(app, ["instance", "create", "dev", "--apply"])
+    result = runner.invoke(app, ["instance", "secret", "dev", "--key", "POSTGRES_PASSWORD"])
+    assert result.exit_code == 0
+    assert result.output.strip() not in ("", "ADMIN_PASSWD")
+
+
+def test_secret_unknown_key_fails(patch_deps, tmp_path: Path) -> None:
+    patch_deps(make_container(tmp_path))
+    runner.invoke(app, ["instance", "create", "dev", "--apply"])
+    result = runner.invoke(app, ["instance", "secret", "dev", "--key", "NOPE"])
+    assert result.exit_code == 1
+    assert "NOPE" in result.output
+
+
 def test_remove_without_yes_removes_nothing(patch_deps, tmp_path: Path) -> None:
     container = make_container(tmp_path)
     patch_deps(container)

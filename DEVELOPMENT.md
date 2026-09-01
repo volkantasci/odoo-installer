@@ -49,6 +49,9 @@ odoo-installer instance create <name> [--dir PATH] [--http-port N] [--image TAG]
     Render a complete compose stack (compose file, .env, config/odoo.conf), `up -d`,
     wait for /web/health, register the instance.
 odoo-installer instance list | show <name>
+odoo-installer instance secret <name> [--key KEY]
+    Print a secret from the instance's .env (default: ADMIN_PASSWD, the Odoo master
+    password). Never guesses: a missing key is a hard error naming the available keys.
 odoo-installer instance start|stop|restart <name>
 odoo-installer instance remove <name> [--remove-data] [--yes]
     remove defaults to keeping volumes/DBs; --remove-data destroys the stack's named
