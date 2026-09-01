@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-09-01
+
+### Added
+
+- Live plan progress: whenever a plan is applied (`--apply`), every step is announced
+  as `[i/n] description` the moment it starts and its result note (or
+  `✔ already satisfied`) follows immediately — for `install`, `instance
+  create/adopt/remove`, `module add/remove` and `db drop/reset` alike, instead of
+  reporting everything only after the whole plan finished.
+
 ## [0.3.0] - 2026-09-01
 
 ### Added
