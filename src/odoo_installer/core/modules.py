@@ -472,10 +472,21 @@ def module_add_plan(
         if not github.branch_exists(f"{origin_owner}/{name}", branch):
             raise StackError(_missing_branch_error(name, origin_owner, branch, catalog))
 
+    # `--sparse` EXTENDS the visible module set (union with previously requested
+    # modules): `git sparse-checkout set` REPLACES the pattern list, and a naive
+    # re-add with one new module would silently delete every other module's files
+    # from the clone while they stay "installed" in the DB — the broken-assets bug.
+    previous_record = next((r for r in manifest.repos if r.repo.split("/")[-1] == name), None)
+    sparse_modules: list[str] | None = None
+    if sparse and modules_opt:
+        sparse_modules = list(
+            dict.fromkeys((previous_record.modules if previous_record else []) + modules_opt)
+        )
+
     def sync_clone() -> str:
         existed = git.is_repo(host_path)
         before = git.current_commit(host_path) if existed else None
-        sparse_dirs = modules_opt if (sparse and modules_opt) else None
+        sparse_dirs = sparse_modules
         if not existed:
             if sparse_dirs:
                 # blob-filtered partial clone: only the requested modules download
@@ -590,7 +601,12 @@ def module_add_plan(
     def record() -> str:
         current = load_manifest(fs, manifest.dir) or manifest
         found = discover_modules(fs, host_path)
-        record_modules = modules_opt or found
+        if sparse and modules_opt:
+            record_modules = sorted(
+                set((previous_record.modules if previous_record else []) + modules_opt)
+            )
+        else:
+            record_modules = modules_opt or found
         record = RepoRecord(
             repo=full,
             url=url,

@@ -274,7 +274,14 @@ class FakeGit:
         return ""
 
     def sparse_checkout_set(self, path: Path, dirs: list[str]) -> str:
+        """Records the new cone set and materializes the dirs (like real git)."""
         self.sparse.append(list(dirs))
+        target = Path(path)
+        for module in dirs:
+            module_dir = target / module
+            module_dir.mkdir(parents=True, exist_ok=True)
+            if not (module_dir / "__manifest__.py").exists():
+                (module_dir / "__manifest__.py").write_text("{}", encoding="utf-8")
         return ""
 
     def is_repo(self, path: Path) -> bool:

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from fakes import FakeDocker, FakeFs, FakeGit, FakeGitHub
 
+from odoo_installer.core.instances import load_manifest
 from odoo_installer.core.modules import (
     compose_volume_edit,
     compose_volume_remove,
@@ -507,3 +508,36 @@ def test_missing_branch_error_generic_hint_without_catalog(tmp_path: Path) -> No
     message = str(excinfo.value)
     assert "does not exist on OCA/no-such-repo" in message
     assert "module search no-such-repo" in message
+
+
+def test_module_add_plan_second_sparse_add_extends_visible_set(tmp_path: Path) -> None:
+    """Regression: the second `module add --sparse --modules X` must NOT narrow the
+    sparse set to X (deleting previously mounted modules' files from the clone while
+    they stay installed in the DB — the broken-assets bug)."""
+    fs = FakeFs()
+    docker = FakeDocker()
+    common = {
+        "config": make_config(tmp_path),
+        "manifest": make_manifest(tmp_path),
+        "sparse": True,
+        "fork": None,
+        "existing_repo": None,
+        "github": FakeGitHub(),
+        "git": FakeGit(
+            remote="https://github.com/OCA/web.git",
+            sample_modules=("web_responsive", "web_dark_mode"),
+        ),
+        "fs": fs,
+        "docker": docker,
+    }
+    apply_steps(module_add_plan(repo_arg="web", modules_opt=["web_responsive"], **common).steps)
+    clone = make_config(tmp_path).instances_root / "dev" / "repos" / "oca-web"
+    assert (clone / "web_responsive" / "__manifest__.py").exists()
+
+    apply_steps(module_add_plan(repo_arg="web", modules_opt=["web_dark_mode"], **common).steps)
+    # both modules remain visible in the clone and in the manifest record
+    assert (clone / "web_responsive" / "__manifest__.py").exists()
+    assert (clone / "web_dark_mode" / "__manifest__.py").exists()
+    manifest = load_manifest(fs, make_manifest(tmp_path).dir)
+    record = next(r for r in manifest.repos if r.repo == "OCA/web")
+    assert sorted(record.modules) == ["web_dark_mode", "web_responsive"]

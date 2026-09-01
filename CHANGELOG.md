@@ -21,6 +21,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any machine (test PASSes or `module approve`) spread to every machine that pulls;
   the CLI itself does not need updating for new approvals, only the repo does.
 
+## [0.5.3] - 2026-09-01
+
+### Fixed
+
+- **Critical regression from 0.5.2's blob-filtered sparse clone:** a second
+  `module add <repo> --sparse --modules X` NARROWED the sparse checkout to X
+  (`git sparse-checkout set` replaces the pattern list), silently deleting every
+  previously mounted module's files from the clone while they stayed "installed" in
+  the database — Odoo then failed with "Could not get content for ..." asset errors
+  and a broken page ("A css error occured").
+- The sparse set and the manifest record now EXTEND with the union of previously
+  requested modules and the new ones; narrowing never happens implicitly.
+- The recorded module list no longer loses previously requested modules on re-add.
+
 ## [0.5.2] - 2026-09-01
 
 ### Changed
