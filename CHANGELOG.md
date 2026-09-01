@@ -21,6 +21,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any machine (test PASSes or `module approve`) spread to every machine that pulls;
   the CLI itself does not need updating for new approvals, only the repo does.
 
+## [0.6.0] - 2026-09-01
+
+### Added
+
+- **Dependency visibility in `module add` dry-run:** for `--modules m1,m2`, the plan
+  verifies and SHOWS each module's dependencies, read from GitHub raw manifests
+  (no clone needed). Every dependency is classified: `core` (verified by listing
+  the web container's core addons), `same-repo` (sibling modules in the same repo),
+  `other-repo` (provider named from the whitelist catalog; mounted later by
+  `install --resolve-deps`), `already available` (mounted/local), and
+  `unknown provider` (with an honest "container offline" label when the core list
+  cannot be obtained).
+- Same-repo sibling dependencies now join the sparse clone automatically, so a
+  later `module install` cannot fail with "module not found" for a sibling it
+  depends on. A `verify dependencies` step re-checks against the real manifests
+  after the clone and aborts with actionable guidance if something is unmet.
+
 ## [0.5.3] - 2026-09-01
 
 ### Fixed
