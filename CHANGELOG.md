@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-09-01
+
+### Added
+
+- `instance secret <name> [--key KEY]`: prints one secret from the instance's `.env`
+  on its own line (plain text, script-friendly). Default key is `ADMIN_PASSWD` — the
+  Odoo master password; e.g. `--key POSTGRES_PASSWORD` reads the DB password. A
+  missing key is a hard error that lists the available keys.
+
+### Changed
+
+- Usage guides (EN/TR) now document the secret command and the master-password lookup
+  flow; DEVELOPMENT.md §2 and the README command list include `instance secret`.
+
 ## [0.2.0] - 2026-09-01
 
 ### Added
