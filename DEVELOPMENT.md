@@ -51,10 +51,12 @@ odoo-installer instance create <name> [--dir PATH] [--http-port N] [--image TAG]
 odoo-installer instance list | show <name>
 odoo-installer instance start|stop|restart <name>
 odoo-installer instance remove <name> [--remove-data] [--yes]
-    remove defaults to keeping volumes/DBs; --remove-data destroys the pgdata volume.
+    remove defaults to keeping volumes/DBs; --remove-data destroys the stack's named
+    volumes (compose down -v). Works for adopted stacks too.
 odoo-installer instance adopt <dir>
-    Register an EXISTING compose stack (e.g. ~/Projects/odoo-docker) without rewriting it.
-    Adopted stacks are managed read-mostly: exec/psql/logs are allowed; file rewriting is not.
+    Register an EXISTING compose stack (e.g. ~/Projects/my-odoo) without rewriting it.
+    Adopted stacks are managed read-mostly: exec/psql/logs are allowed; file rewriting is not
+    (the one mutating exception is an explicit `instance remove --apply --yes`).
 
 odoo-installer module add <oca-repo> [--modules m1,m2] [--sparse] [--repo PATH] [--apply]
     Clone OCA/<repo> at the branch matching 19.0, mount it into the stack, rewrite
@@ -237,8 +239,14 @@ volumes: { pgdata: }
 - The db service is **not** published on the host; all DB access goes through the stack.
 - `addons_path` in `odoo.conf` starts as `/mnt/extra-addons` and gains `/mnt/oca/<repo>`
   entries when repos are added; `module add` rewrites the file and restarts `web`.
-- Port allocation: first free port in 8069–8099 unless `--http-port` is given (the live
-  stack on this machine already owns 8069).
+- Port allocation: first free port in 8069–8099 unless `--http-port` is given. A port
+  is "free" at allocation time only — a stopped stack does not reserve its port, so two
+  instances can end up sharing one; start them one at a time or pin ports explicitly.
+- Master password: `create` generates a random `admin_passwd`, bakes it into
+  `config/odoo.conf` and records it as `ADMIN_PASSWD` in `.env`. The official odoo
+  image provides the master password through NO environment variable (its entrypoint
+  only wires the DB connection vars), and the database-manager form is never pre-filled
+  server-side — a "pre-filled" password field is the browser's saved-password autofill.
 
 ---
 
@@ -281,7 +289,10 @@ The tool must behave exactly like the documented OCA workflow:
    convention avoids clashing with the serving process — same as manual practice).
 7. **Adopted stacks are read-mostly.** `instance adopt` never rewrites compose files;
    it may only append addons mounts if explicitly confirmed, otherwise reports what the
-   user must add by hand.
+   user must add by hand. The single mutating exception is `instance remove --apply
+   --yes`, which tears the stack down (with `--remove-data`, its named volumes too) and
+   deletes the stack directory — an explicit, confirmed destructive action, never a
+   silent rewrite.
 
 ---
 
@@ -299,8 +310,8 @@ The tool must behave exactly like the documented OCA workflow:
   `StackError`, `GitError`, `GitHubError`, `ConfigError`, `ModuleError`, `TestFailureError`.
   The CLI renders user-facing messages and maps errors to the exit codes above
   (no `--debug` flag exists in v1.0).
-- **Live instance care:** commands that could touch the production `odoo` DB on this
-  machine require an explicit `--db` value (never a default) when the stack is adopted.
+- **Live instance care:** commands that could touch a production `odoo` DB require an
+  explicit `--db` value (never a default) when the stack is adopted.
   Scratch DBs used by `test` are named `oitest_*` and dropped afterwards unless `--keep-db`.
 
 ---
@@ -313,7 +324,7 @@ Pyramid, enforced by CI:
 |-------|-------|-------|
 | Unit (`tests/unit/`) | core + cli against `FakeDocker`, `FakeGit`, `FakeGitHub`, `FakeSystem`, `tmp_path` | offline, deterministic, < 5 s, no markers; every core function's plan generation AND execution paths covered |
 | Integration (`tests/integration/`, marker `integration`, opt-in via `OII_INTEGRATION=1`) — **deferred to v1.1** | real `git clone` of a small OCA repo, real `docker compose up` on an ephemeral port, full `instance create → module add → module install → test module` cycle on a throwaway stack | planned: run locally and in a CI docker job; tear down everything in `finally` |
-| Live smoke (manual, documented) | adopted `~/Projects/odoo-docker` stack | read-mostly commands + one scratch-DB module test; never mutates the `odoo` DB |
+| Live smoke (manual, documented) | any adopted stack | read-mostly commands + one scratch-DB module test; never mutates the production DB. Note: this machine currently has no live stack (the former `~/Projects/odoo-docker` was decommissioned) |
 
 **Deferral note (recorded at v0.1.0):** the integration layer and its CI docker job
 were deferred to v1.1 — the M4/M5 acceptance relied on the unit layer plus the
@@ -451,8 +462,9 @@ odoo-installer --version
 
 Notes for this machine: system Python is 3.14 (Arch); if a pinned dev dependency lags on
 3.14, create the venv with an older interpreter rather than dropping the floor below 3.11.
-The live Odoo 19.0 stack runs at `~/Projects/odoo-docker` (ports 8069) — port auto-allocation
-and the adopted-stack care rules in §7 exist because of it.
+There is currently no live Odoo stack on this machine (the former manual stack at
+`~/Projects/odoo-docker` was decommissioned) — port auto-allocation and the adopted-stack
+care rules in §7 exist because adopted stacks may be production.
 
 ## 12. Risks & mitigations
 
@@ -462,5 +474,5 @@ and the adopted-stack care rules in §7 exist because of it.
 | Odoo weekly image tags drift | default `odoo:19.0`; `--image` override recorded in the manifest |
 | OCA branch moves fast (ocabot bumps) | manifest stores last synced commit; `module upgrade-repos` (deferred to v1.1) re-syncs |
 | Log parsing fragility | parser matched against recorded fixture logs from real runs; exit code is primary signal |
-| Destructive ops on the live stack | plan-first + `--yes`, explicit `--db`, adopted stacks read-mostly, scratch DB naming `oitest_*` |
+| Destructive ops on production stacks | plan-first + `--yes`, explicit `--db`, adopted stacks read-mostly (only explicit removal mutates), scratch DB naming `oitest_*` |
 | GitHub rate limits | `GITHUB_TOKEN`/`GH_TOKEN` env support; graceful degradation to offline discovery |

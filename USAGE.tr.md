@@ -115,6 +115,8 @@ stack'ler **okuma-ağırlıklı** yönetilir:
 - Dosya değişiklikleri (ör. `module add` ile mount eklemek) açık `--yes` gerektirir ve
   CLI sahiplenilen stack'i **asla yeniden başlatmaz** — kendi aracınızla yeniden
   başlatmanızı söyler.
+- Tek mutasyon istisnası `instance remove --apply --yes`'tır: stack'i söker ve
+  dizinini siler (bkz. §4.4).
 
 ### 3.4 Test edilmiş modüller beyaz listesi
 
@@ -234,10 +236,13 @@ odoo-installer instance restart <ad>     # docker compose restart
 odoo-installer instance remove <ad> [--remove-data] [--yes] [--apply]
 ```
 
-Varsayılan dry-run; yalnızca `--apply --yes` ile uygulanır. Varsayılan olarak pgdata
-volume'ü (ve onunla birlikte veritabanlarınız) **korunur**; `--remove-data` onu yok
-eder. Instance'ı yeniden oluşturduğunuzda, açıkça istemediyseniz verileriniz yerinde
-kalır.
+Varsayılan dry-run; yalnızca `--apply --yes` ile uygulanır. Varsayılan olarak stack'in
+data volume'leri (ve onlarla birlikte veritabanlarınız) **korunur**; `--remove-data`,
+compose dosyasında tanımlı named volume'leri yok eder (`docker compose down -v`);
+bind-mount edilmiş veriler stack diziniyle birlikte gider. **Sahiplenilen stack'ler için
+de çalışır** — kaldırma, onlar üzerinde izin verilen tek açıkça onaylanmış yıkıcı
+işlemdir. Instance'ı yeniden oluşturduğunuzda, açıkça istemediyseniz verileriniz
+yerinde kalır.
 
 #### Mevcut bir stack'i sahiplenme
 
@@ -251,9 +256,9 @@ kaydını yazar; stack dosyalarını asla yeniden yazmaz. Okuma-ağırlıklı ku
 §3.3.
 
 ```console
-$ odoo-installer instance adopt ~/Projects/odoo-docker --apply
-tespit edildi: proje odoo-docker, web servisi web (odoo:19.0) port 8069, ...
-✔ instance 'odoo-docker' sahiplenildi (okuma-ağırlıklı)
+$ odoo-installer instance adopt ~/Projects/my-odoo --apply
+tespit edildi: proje my-odoo, web servisi web (odoo:19.0) port 8069, ...
+✔ instance 'my-odoo' sahiplenildi (okuma-ağırlıklı)
 ```
 
 ### 4.5 `db` — veritabanları
@@ -476,9 +481,9 @@ odoo-installer test suite --output rapor.md --output rapor.json
 ### 6.6 Üretim stack'ini sahiplenme ve güvenle inceleme
 
 ```bash
-odoo-installer instance adopt ~/Projects/odoo-docker --apply
-odoo-installer db list --instance odoo-docker     # psql -l ile eşleşmeli
-odoo-installer module list --instance odoo-docker --db odoo
+odoo-installer instance adopt ~/Projects/my-odoo --apply
+odoo-installer db list --instance my-odoo         # psql -l ile eşleşmeli
+odoo-installer module list --instance my-odoo --db odoo
 odoo-installer module test web_responsive         # yalnızca scratch DB, asla odoo DB değil
 ```
 
@@ -547,9 +552,10 @@ yapılandırmanızdaki ortam değişkeni adı) ve tekrar deneyin. Token olmadan 
 keşif yine de çalışır.
 
 **Port dolu.**
-`instance create` 8069–8099 aralığındaki ilk boş portu seçer; bu makinedeki canlı stack
-8069'u kullanır. `--http-port` ile sabitleyin veya `config set port_range_end ...` ile
-aralığı genişletin.
+`instance create` 8069–8099 aralığındaki ilk boş portu seçer — ama *durdurulmuş* bir
+stack portunu rezerve etmez, bu yüzden iki instance aynı porta kaydolabilir. Onları
+sırayla başlatın, `--http-port` ile sabitleyin veya `config set port_range_end ...`
+ile aralığı genişletin.
 
 **Sahiplenilen stack "restart with your own tooling" diyor.**
 Sahiplenilen stack'te `module add --yes` sonrası CLI dosyaları günceller ama
@@ -562,9 +568,12 @@ koduyla çıkar — yakalanan çıktının son satırlarına (soluk yazdırılı
 bağımlılıklarına bakın.
 
 **Veritabanı yöneticisi master password soruyor — şifre nerede?**
-Odoo bu alanı asla otomatik doldurmaz (tarayıcı daha önce kaydedilmiş bir şifreyi
-autofill edebilir). `instance create` rastgele bir master password üretir ve
-`<stack>/.env` (`ADMIN_PASSWD=...`) ile `<stack>/config/odoo.conf`
+Hiçbir şey bu alanı sizin yerinize doldurmaz: resmi `odoo` imajı master password'ü
+**hiçbir ortam değişkeniyle** sağlamaz (entrypoint'i yalnızca DB bağlantı
+değişkenlerini ayarlar, imajın varsayılan config'inde `admin_passwd` yorum satırıdır)
+ve Odoo formu sunucu tarafında asla ön-doldurmaz. Dolu görünen alan, tarayıcınızın
+kaydettiği şifrenin autofill'idir. `instance create` rastgele bir master password
+üretir ve `<stack>/.env` (`ADMIN_PASSWD=...`) ile `<stack>/config/odoo.conf`
 (`admin_passwd = ...`) dosyalarına yazar. İkisinden birindeki değeri kullanın. Kendi
 şifrenizi belirlemek için `config/odoo.conf` içindeki `admin_passwd`'i (tutarlılık için
 `.env`'i de) düzenleyip `odoo-installer instance restart <ad>` çalıştırın.

@@ -43,7 +43,7 @@ odoo-installer module test web_responsive  # scratch-DB test run; PASS -> whitel
 odoo-installer module install web_responsive --db odoo
 
 odoo-installer test suite --output report.md --output report.json
-odoo-installer instance adopt ~/Projects/odoo-docker --apply   # manage an existing stack
+odoo-installer instance adopt ~/Projects/my-odoo --apply      # manage an existing stack
 ```
 
 The whitelist is the contract: only modules that pass `module test` (or the `test suite`)

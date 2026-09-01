@@ -113,6 +113,8 @@ by hand before using the tool) without rewriting its files. Adopted stacks are m
 - File edits (e.g. `module add` appending a mount) require an explicit `--yes`, and the
   CLI **never restarts** an adopted stack — it tells you to restart with your own
   tooling instead.
+- The one mutating exception is `instance remove --apply --yes`, which tears the stack
+  down and deletes its directory (see §4.4).
 
 ### 3.4 The tested-addons whitelist
 
@@ -230,9 +232,12 @@ odoo-installer instance restart <name>    # docker compose restart
 odoo-installer instance remove <name> [--remove-data] [--yes] [--apply]
 ```
 
-Dry-run by default; executes only with `--apply --yes`. By default the pgdata volume
-(and with it your databases) is **kept**; `--remove-data` destroys it. When re-creating
-an instance, its data is preserved unless you asked for it to be destroyed.
+Dry-run by default; executes only with `--apply --yes`. By default the stack's data
+volumes (and with them your databases) are **kept**; `--remove-data` destroys the named
+volumes declared in the compose file (`docker compose down -v`); bind-mounted data goes
+away with the stack directory. Works for **adopted stacks too** — removal is the one
+explicitly confirmed destructive action allowed on them. When re-creating an instance,
+its data is preserved unless you asked for it to be destroyed.
 
 #### Adopt an existing stack
 
@@ -245,9 +250,9 @@ images, published port), writes only the odoo-installer manifest and registry en
 and never rewrites the stack files. See §3.3 for the read-mostly rules.
 
 ```console
-$ odoo-installer instance adopt ~/Projects/odoo-docker --apply
-detected: project odoo-docker, web service web (odoo:19.0) on port 8069, ...
-✔ instance 'odoo-docker' adopted (read-mostly)
+$ odoo-installer instance adopt ~/Projects/my-odoo --apply
+detected: project my-odoo, web service web (odoo:19.0) on port 8069, ...
+✔ instance 'my-odoo' adopted (read-mostly)
 ```
 
 ### 4.5 `db` — databases
@@ -468,9 +473,9 @@ odoo-installer test suite --output report.md --output report.json
 ### 6.6 Adopt the production stack and inspect it safely
 
 ```bash
-odoo-installer instance adopt ~/Projects/odoo-docker --apply
-odoo-installer db list --instance odoo-docker     # must match psql -l
-odoo-installer module list --instance odoo-docker --db odoo
+odoo-installer instance adopt ~/Projects/my-odoo --apply
+odoo-installer db list --instance my-odoo         # must match psql -l
+odoo-installer module list --instance my-odoo --db odoo
 odoo-installer module test web_responsive         # scratch DB only, never the odoo DB
 ```
 
@@ -536,8 +541,9 @@ Set a token: `export GITHUB_TOKEN=ghp_...` (or the env var named in your
 `github_token_env` config) and retry. Without a token, offline discovery still works.
 
 **Port already taken.**
-`instance create` auto-picks the first free port in 8069–8099; the live stack on this
-machine owns 8069. Pin a port with `--http-port` or widen the range via
+`instance create` auto-picks the first free port in 8069–8099 — but a *stopped* stack
+does not reserve its port, so two instances can end up registered on the same one. Start
+them one at a time, pin a port with `--http-port`, or widen the range via
 `config set port_range_end ...`.
 
 **Adopted stack says "restart with your own tooling".**
@@ -551,11 +557,15 @@ check the last lines of the captured output (shown dimmed) and the module's
 dependencies.
 
 **The database manager asks for a master password — where is it?**
-Odoo never pre-fills that field (a browser may autofill a previously saved password).
-`instance create` generates a random master password and stores it in `<stack>/.env`
-(`ADMIN_PASSWD=...`) and in `<stack>/config/odoo.conf` (`admin_passwd = ...`). Use the
-value from either file. To set your own, edit `admin_passwd` in `config/odoo.conf`
-(and `.env` for consistency) and run `odoo-installer instance restart <name>`.
+Nothing fills that field for you: the official `odoo` image provides the master
+password through **no environment variable** (its entrypoint only wires the DB
+connection vars, and the shipped default config has `admin_passwd` commented out), and
+Odoo never pre-fills the form server-side. What looks like a pre-filled field is your
+browser's saved-password autofill. `instance create` generates a random master password
+and stores it in `<stack>/.env` (`ADMIN_PASSWD=...`) and in
+`<stack>/config/odoo.conf` (`admin_passwd = ...`). Use the value from either file. To
+set your own, edit `admin_passwd` in `config/odoo.conf` (and `.env` for consistency)
+and run `odoo-installer instance restart <name>`.
 
 **Two instances want the same port (8069).**
 Port auto-allocation picks the first port that is free *right now* — a stopped stack
