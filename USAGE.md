@@ -1,107 +1,106 @@
 # odoo-installer — Usage Guide
 
-A detailed, practical guide to installing, configuring and managing **Odoo 19.0 Docker
-stacks** with `odoo-installer` — including correct-branch OCA module management and
-automated installability testing.
+> **Works with 0.6.0+** · Read this in [Türkçe](USAGE.tr.md)
+>
+> Architecture, decisions and milestones live in [DEVELOPMENT.md](DEVELOPMENT.md).
 
-For architecture, design decisions and the development plan, see
-[DEVELOPMENT.md](DEVELOPMENT.md). This guide documents the commands as they behave in
-v0.1.x.
+`odoo-installer` is one CLI for your Odoo 19.0 fleet — it creates and manages Docker
+stacks, installs OCA modules at the correct branch, proves modules work before they
+ship, and shares those approvals across every machine you use. Everything it changes,
+it shows you first.
 
 ---
 
-## Table of contents
+## Contents
 
-1. [What the tool does and does not do](#1-what-the-tool-does-and-does-not-do)
+1. [At a glance](#1-at-a-glance)
 2. [Installation](#2-installation)
-3. [Core concepts](#3-core-concepts)
+3. [How it thinks](#3-how-it-thinks)
 4. [Command reference](#4-command-reference)
-5. [Configuration files and state](#5-configuration-files-and-state)
-6. [Common workflows](#6-common-workflows)
-7. [Safety rules and exit codes](#7-safety-rules-and-exit-codes)
+5. [Files and configuration](#5-files-and-configuration)
+6. [Recipes](#6-recipes)
+7. [Safety and exit codes](#7-safety-and-exit-codes)
 8. [Troubleshooting](#8-troubleshooting)
 
 ---
 
-## 1. What the tool does and does not do
+## 1. At a glance
 
-`odoo-installer` manages Odoo 19.0 **only through Docker**. It never installs Odoo
-natively on the host: every instance is a `docker compose` stack (a `web` service and a
-`db` service) generated, started, and managed by the CLI. On top of that it provides:
+| Command family | What it gives you |
+|----------------|-------------------|
+| `doctor` | Instant host diagnosis — docker, compose, git, disk, ports, GitHub reachability |
+| `install` | Host prerequisites via pacman/apt — Odoo itself is **never** installed on the host |
+| `config` | Validated, atomic global configuration |
+| `instance` | Full stack lifecycle: create, adopt existing stacks, start/stop, secret lookup, remove |
+| `db` | Database list/create/drop/reset through the stack's own postgres container |
+| `module` | OCA repos and modules: add with dependency visibility, list, search, install, upgrade, remove, test, approve |
+| `test` | Batch test suites with reports + central whitelist sync |
 
-- **OCA module management** — clones OCA repositories at the verified `origin/19.0`
-  branch, mounts them into a stack, and rewrites `addons_path` for you.
-- **Installability testing** — installs each module on a throwaway scratch database,
-  runs its test suite inside the container, parses the log, and records PASSes in an
-  installable-addons whitelist. `module install` refuses untested modules.
-- **Plan-first safety** — every destructive or system-changing command prints exactly
-  what it would do and exits without doing anything until you pass `--apply` (and
-  `--yes` for destructive confirmations). Idempotent re-runs are guaranteed.
+Three ideas make it safe to use on a machine that also runs production:
 
-**Non-goals (v1):** native (non-Docker) Odoo, other Odoo versions, GUI/TUI, database
-backup/restore, SMTP wizard, reverse-proxy/TLS generation.
-
-### Requirements
-
-- Python ≥ 3.11
-- Docker engine + the `compose` plugin
-- `git`
-- Linux host (Arch Linux is the reference platform; Debian/Ubuntu package adapters are
-  in place but less battle-tested)
-
-Run `odoo-installer doctor` to verify your host.
+- **Plan-first** — every mutation prints its exact plan and runs only with `--apply`
+  (plus `--yes` when destructive). Applied plans stream live `[i/n]` step progress.
+- **Tested-only installs** — `module install` refuses any module that has not passed
+  a real test run or been explicitly approved.
+- **Explicit database names** — the CLI never picks a database for you.
 
 ---
 
 ## 2. Installation
 
 ```bash
-pip install odoo-installer            # from PyPI (0.1.1+)
+pip install odoo-installer            # from PyPI
 # or from a checkout:
 pip install .
 # or, for development:
 pip install -e ".[dev]"
 ```
 
-Enable shell completion (bash/zsh/fish):
+For an isolated daily-use install (recommended over mixing with a dev venv):
 
 ```bash
-odoo-installer --install-completion
+pipx install odoo-installer           # or: uv tool install odoo-installer
 ```
 
-The CLI is also available as `oii` and via `python -m odoo_installer`.
+Enable shell completion (bash/zsh/fish): `odoo-installer --install-completion`.
+
+The CLI answers to three names: `odoo-installer`, `oii` and `python -m odoo_installer`.
+
+> 💡 **Upgrading:** `pip install -U odoo-installer` (or `pipx upgrade
+> odoo-installer`). If pip claims "already satisfied" right after a release, pin the
+> version for one run — `pip install "odoo-installer==X.Y.Z"` — the index cache can
+> lag a few minutes behind PyPI.
 
 ---
 
-## 3. Core concepts
+## 3. How it thinks
 
 ### 3.1 Instances
 
-An **instance** is one Odoo stack in its own directory (default root:
-`~/odoo-instances/`). Each instance gets:
+An **instance** is one Odoo stack in its own directory (default root
+`~/odoo-instances/`):
 
 ```text
 ~/odoo-instances/<name>/
 ├── docker-compose.yml       # rendered from templates
 ├── .env                     # image, pg tag, http port, generated secrets
-├── config/odoo.conf         # addons_path rewritten by `module add`
-├── addons/local/            # your own modules (mounted as /mnt/extra-addons)
-├── repos/<oca-repo>/        # OCA clones (each mounted as /mnt/oca/<repo>)
+├── config/odoo.conf         # addons_path, rewritten by `module add`
+├── addons/local/            # your own modules → /mnt/extra-addons
+├── repos/<oca-repo>/        # OCA clones → /mnt/oca/<repo>
 ├── logs/                    # captured test logs (test-<module>-<ts>.log)
 └── .odoo-installer.json     # instance manifest
 ```
 
-The `db` service is **not** published on the host — all database access goes through
+The `db` service is never published on the host — all database access goes through
 the stack (psql inside the `db` container).
 
-### 3.2 Plan-first (dry-run by default)
+### 3.2 Plan-first, with live progress
 
-Commands that change anything (`install`, `instance create/remove`, `module add/remove`,
-`db drop/reset`) print a numbered plan of the exact commands and file writes and exit 0
-**without executing anything** until you add `--apply`. Destructive operations
-additionally require `--yes`. The printed plan *is* the executed code path — dry-run is
-exact by construction. When a plan is applied, every step is announced live as
-`[i/n] description` followed by its result, so you always know which stage is running:
+Mutating commands (`install`, `instance create/remove`, `module add/remove`,
+`db drop/reset`) print a numbered plan of the exact commands and file writes and exit
+0 **without doing anything** until you add `--apply` (plus `--yes` for destructive
+confirmations). The printed plan *is* the executed code path. When a plan runs, every
+step is announced as it happens:
 
 ```console
 $ odoo-installer instance create dev --apply
@@ -117,38 +116,34 @@ $ odoo-installer instance create dev --apply
 
 ### 3.3 Adopted stacks
 
-`instance adopt <dir>` registers an **existing** compose stack (e.g. a stack you built
-by hand before using the tool) without rewriting its files. Adopted stacks are managed
-**read-mostly**:
+`instance adopt <dir>` registers an **existing** compose stack (detected purely from
+container labels) without rewriting its files. Adopted stacks are **read-mostly**:
 
-- `start/stop/restart`, `exec`, `psql`, and log access work normally.
-- `start` uses `docker compose start` — the stack is never recreated.
-- File edits (e.g. `module add` appending a mount) require an explicit `--yes`, and the
-  CLI **never restarts** an adopted stack — it tells you to restart with your own
-  tooling instead.
-- The one mutating exception is `instance remove --apply --yes`, which tears the stack
-  down and deletes its directory (see §4.4).
+- lifecycle (`start/stop/restart`), `exec`, `psql` and log access work normally;
+- `start` uses `docker compose start` — the stack is never recreated;
+- file edits (e.g. `module add` appending a mount) need an explicit `--yes`, and the
+  CLI never recreates the containers — it tells you to do it yourself;
+- the one mutating exception is `instance remove --apply --yes`, which tears the
+  stack down (with `--remove-data`, its named volumes too) and deletes the directory.
 
-### 3.4 The tested-addons whitelist
+### 3.4 The whitelist — tested means installable
 
-`module test` and `test suite` record every PASS in `~/.config/odoo-installer/tested.toml`
-(module → repo, branch, commit, db, log path). `module install`/`module upgrade`
-**refuse** any module that has no whitelist entry, unless you pass `--allow-untested`.
-This is the contract of the tool: only tested modules are installable.
+`module test` and `test suite` install each module on a throwaway **scratch database**
+(`oitest_<module>`, dropped afterwards unless `--keep-db`), run its tests inside the
+container, and record every PASS in the whitelist
+(`~/.config/odoo-installer/tested.toml`). `module install` / `module upgrade` refuse
+anything that is not whitelisted unless you pass `--allow-untested`. That is the
+contract: **only proven modules are installed.**
 
-### 3.5 Scratch databases
-
-`module test` and `test suite` never touch your real databases. Each module is tested
-on a throwaway database named `oitest_<module>`, which is dropped afterwards unless you
-pass `--keep-db`. Database names are **always explicit** CLI arguments — there is no
-default database.
+The whitelist is also **portable** — see [§4.7](#47-test--batch-testing-and-central-sync):
+a small git repo can carry approvals to every machine, and `module approve` records
+modules that are already proven on a running stack.
 
 ---
 
 ## 4. Command reference
 
-Global options: `--version` / `-V` (show version and exit), `--help` everywhere.
-There is also a `version` command that prints the bare version number.
+Global: `--version` / `-V`, `--help` everywhere, plus a `version` command.
 
 ### 4.1 `doctor` — host diagnostics
 
@@ -156,14 +151,9 @@ There is also a `version` command that prints the bare version number.
 odoo-installer doctor [--json]
 ```
 
-Checks: docker engine, compose plugin, docker group membership, git, disk space at the
-instances root, port availability in the configured range (8069–8099), and github.com
-reachability. Renders a table (or JSON) and **exits with code 4** when a critical check
-fails.
-
-```console
-$ odoo-installer doctor --json | head
-```
+Checks docker engine, compose plugin, docker group membership, git, disk space at the
+instances root, port availability in the configured range and github.com
+reachability. Exits **4** when a critical check fails.
 
 ### 4.2 `install` — host prerequisites
 
@@ -171,38 +161,29 @@ $ odoo-installer doctor --json | head
 odoo-installer install [--apply]
 ```
 
-Installs **host prerequisites only** — docker engine, the compose plugin, and git —
-through pacman (Arch) or apt (Debian/Ubuntu). It never installs Odoo itself; that is
-what stacks are for. Without `--apply` it prints the plan; with `--apply` it executes.
-On a satisfied host it reports that nothing needs to be done (re-runs are no-ops).
+Installs docker engine, the compose plugin and git via pacman (Arch) or apt
+(Debian/Ubuntu). Never installs Odoo itself. Idempotent — a satisfied host is a no-op.
 
 ### 4.3 `config` — global configuration
 
 ```bash
-odoo-installer config show [--json]        # resolved configuration
-odoo-installer config set <key> <value>    # set one key (validated)
-odoo-installer config edit                 # open $VISUAL/$EDITOR in-place, validated
-odoo-installer config path                 # print the config file path
+odoo-installer config show [--json]
+odoo-installer config set <key> <value>
+odoo-installer config edit          # $VISUAL/$EDITOR, validated before saving
+odoo-installer config path
 ```
-
-Keys and defaults (see §5.1 for the full table):
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `instances_root` | `~/odoo-instances` | where new stacks are created |
-| `repo_root` | `~/odoo-repos` | where the CLI clones OCA repos for adopted stacks |
+| `instances_root` | `~/odoo-instances` | where new stacks live |
+| `repo_root` | `~/odoo-repos` | where OCA clones go for adopted stacks |
 | `default_pg_tag` | `17` | postgres image tag |
-| `port_range_start` / `port_range_end` | `8069` / `8099` | auto-allocation range (must be ≥ 1024) |
-| `github_token_env` | `GITHUB_TOKEN` | env var name holding a GitHub token |
+| `port_range_start` / `port_range_end` | `8069` / `8099` | auto-allocation range (≥ 1024) |
+| `github_token_env` | `GITHUB_TOKEN` | env var holding a GitHub token |
+| `tested_repo_url` | *(empty)* | central whitelist repo (see §4.7) |
 
-Unknown keys are rejected — typos in `config.toml` fail loudly. `set` coerces and
-validates values with pydantic; `edit` validates the result before saving and saves
-nothing if the file is invalid.
-
-```bash
-odoo-installer config set port_range_end 8095
-odoo-installer config set github_token_env GH_TOKEN
-```
+Unknown keys are rejected; `set` validates values; `edit` validates the result and
+saves nothing when invalid.
 
 ### 4.4 `instance` — stack lifecycle
 
@@ -213,37 +194,27 @@ odoo-installer instance create <name> [--dir PATH] [--http-port N] [--image TAG]
                             [--pg-tag N] [--apply]
 ```
 
-Renders the complete stack (`docker-compose.yml`, `.env`, `config/odoo.conf`), starts it
-with `docker compose up -d`, waits for `/web/health`, and registers the instance.
+Renders the stack, starts it, waits for `/web/health`, registers the instance.
 
-- **Port:** first free port in the configured range (8069–8099) unless `--http-port` is
-  given. The allocated port is pinned in the manifest, so re-runs keep it.
-- **Secrets:** the postgres password and admin password are generated on first run and
-  persisted in `.env` — re-runs never rotate them.
-- **Idempotency:** re-running `create` for an existing, healthy instance is a no-op.
-- Default image is `odoo:19.0`; override with `--image` (recorded in the manifest).
-
-```console
-$ odoo-installer instance create dev            # dry-run: prints the plan
-$ odoo-installer instance create dev --apply    # execute
-✔ instance 'dev' ready at http://localhost:8069
-```
+- **Port:** first free port in the configured range — a *stopped* stack does not
+  reserve its port, so two instances can share one; pin with `--http-port`.
+- **Secrets:** postgres and admin passwords are generated once and persisted. The
+  master password is baked into `config/odoo.conf` (`admin_passwd`) and recorded in
+  `.env` (`ADMIN_PASSWD`) — the official odoo image provides it through no
+  environment variable, and the database manager never pre-fills the field.
 
 #### List / show / secret / lifecycle
 
 ```bash
 odoo-installer instance list
-odoo-installer instance show <name>       # manifest details + docker compose ps
-odoo-installer instance secret <name> [--key KEY]   # print a .env secret
-odoo-installer instance start <name>      # created: up -d · adopted: compose start
-odoo-installer instance stop <name>       # docker compose stop
-odoo-installer instance restart <name>    # docker compose restart
+odoo-installer instance show <name>
+odoo-installer instance secret <name> [--key KEY]
+odoo-installer instance start|stop|restart <name>
 ```
 
-`secret` prints one value from the instance's `.env` on its own line (plain text, so it
-pipes cleanly). The default key is `ADMIN_PASSWD` — the Odoo master password; other
-keys such as `POSTGRES_PASSWORD` work with `--key`. A missing key is a hard error that
-lists the available keys.
+`secret` prints one value from the instance's `.env` on its own line (default:
+`ADMIN_PASSWD` — the master password; e.g. `--key POSTGRES_PASSWORD`). Unknown keys
+are a hard error listing the available keys.
 
 #### Remove
 
@@ -251,12 +222,10 @@ lists the available keys.
 odoo-installer instance remove <name> [--remove-data] [--yes] [--apply]
 ```
 
-Dry-run by default; executes only with `--apply --yes`. By default the stack's data
-volumes (and with them your databases) are **kept**; `--remove-data` destroys the named
-volumes declared in the compose file (`docker compose down -v`); bind-mounted data goes
-away with the stack directory. Works for **adopted stacks too** — removal is the one
-explicitly confirmed destructive action allowed on them. When re-creating an instance,
-its data is preserved unless you asked for it to be destroyed.
+Dry-run by default; executes only with `--apply --yes`. Volumes are **kept** unless
+`--remove-data` (which destroys the named volumes declared in the compose file).
+Works for **adopted stacks too** — removal is the one explicitly confirmed mutation
+allowed on them.
 
 #### Adopt an existing stack
 
@@ -264,42 +233,20 @@ its data is preserved unless you asked for it to be destroyed.
 odoo-installer instance adopt <dir> [--name NAME] [--db-user odoo] [--apply]
 ```
 
-Detects the stack purely from container labels (compose project, web/db services,
-images, published port), writes only the odoo-installer manifest and registry entry,
-and never rewrites the stack files. See §3.3 for the read-mostly rules.
-
-```console
-$ odoo-installer instance adopt ~/Projects/my-odoo --apply
-detected: project my-odoo, web service web (odoo:19.0) on port 8069, ...
-✔ instance 'my-odoo' adopted (read-mostly)
-```
-
 ### 4.5 `db` — databases
 
-All database operations are executed through `psql` in the instance's `db` container.
-The database name is **always** an explicit positional argument.
-
 ```bash
-odoo-installer db list [--instance NAME]                  # names + sizes
+odoo-installer db list [--instance NAME]
 odoo-installer db create <db> [--instance NAME]           # idempotent
 odoo-installer db drop <db> [--instance NAME] [--yes] [--apply]
 odoo-installer db reset <db> [--instance NAME] [--yes] [--apply]
 ```
 
-- `create` reports `already exists` when the database is present.
-- `drop`/`reset` are plan-first and execute only with `--apply --yes`. They print a red
-  warning in dry-run.
-- `reset` = drop + recreate (empty database).
-- The protected databases `postgres`, `template0` and `template1` are refused.
-- `--instance` defaults to the only registered instance; with several registered
-  instances it must be given.
+Executed through psql in the instance's `db` container. Database names are always
+explicit; `postgres`/`template0`/`template1` are refused; `drop`/`reset` need
+`--apply --yes`.
 
-```console
-$ odoo-installer db create odoo --instance dev
-✔ database 'odoo': created
-```
-
-### 4.6 `module` — OCA repositories and modules
+### 4.6 `module` — OCA repos and modules
 
 #### Add a repo
 
@@ -308,30 +255,36 @@ odoo-installer module add <oca-repo> [--modules m1,m2] [--sparse] [--repo PATH]
                          [--fork USER] [--instance NAME] [--yes] [--apply]
 ```
 
-- `<oca-repo>` may be `server-tools` or `OCA/server-tools`.
-- The **19.0 branch is verified via the GitHub API before cloning** — a repo without a
-  `19.0` branch is a hard error. The tool never guesses or falls back to `master`.
-- Clones are shallow, single-branch (`--depth 1 --branch 19.0`).
-- `--modules m1,m2`: record only these modules (the whole repo is still mounted unless
-  `--sparse` is used).
-- `--sparse`: **blob-filtered partial clone** (`git clone --filter=blob:none
-  --sparse`) — only the requested modules are downloaded, so a huge repo like OCA/web
-  costs a couple of megabytes instead of the full snapshot. The plan announces the
-  sparse scope explicitly.
-- `--repo PATH`: mount an **existing local checkout** instead of cloning. The CLI never
-  switches branches or mutates a checkout it does not own.
-- `--fork USER`: clone from your fork (`origin = your fork`, `upstream = OCA`).
-- Afterwards the CLI appends the compose volume + `addons_path` entry (with automatic
-  backups and `docker compose config` validation) and **recreates** `web`
-  (`docker compose up -d` — a plain restart would not mount the new volume) for stacks
-  it created. On adopted stacks it requires `--yes` and tells you to recreate the
-  stack yourself.
+- The argument is a **repo** (`web`, `OCA/server-tools`) — not a module name. The
+  19.0 branch is verified via the GitHub API before cloning; a module name passed by
+  mistake gets a hint naming the repo that provides it.
+- `--modules m1,m2` records only these modules — and the plan **verifies and shows
+  their dependencies**, classified from GitHub raw manifests:
 
-```console
-$ odoo-installer module add web --sparse --modules web_responsive --apply
-repo web at branch 19.0 -> ~/odoo-instances/dev/repos/web:/mnt/oca/web
-✔ web added
-```
+  ```console
+  $ odoo-installer module add web --sparse --modules web_responsive
+  ...
+  3. → verify dependencies of web_responsive
+       (core: base, web, mail, web_tour · already available: —)
+  ```
+
+  - **core** — verified by listing the running container's core addons dir;
+  - **same-repo** — siblings in the same repo; they join the sparse clone
+    automatically, so the later install cannot fail with "module not found";
+  - **other-repo** — provider repo named in the plan; mounted later by
+    `install --resolve-deps`;
+  - **already available** — provided by the local addons or another mounted repo.
+- `--sparse` performs a **blob-filtered partial clone**
+  (`git clone --filter=blob:none --sparse --depth 1`) — only the requested modules
+  download.
+- `--repo PATH` mounts an existing checkout **as-is** — the CLI never switches its
+  branch.
+- `--fork USER` clones from your fork (`origin` = fork, `upstream` = OCA).
+- The CLI appends the compose volume + `addons_path` (with backups and
+  `docker compose config` validation) and **recreates** `web` (`up -d` — a plain
+  restart would not mount the new volume). Adopted stacks: `--yes` required, and you
+  recreate the stack yourself.
+- After success it prints the next steps: `module test` → whitelist → `module install`.
 
 #### List / search
 
@@ -340,56 +293,39 @@ odoo-installer module list [--instance NAME] [--db DB] [--json]
 odoo-installer module search <query> [--limit N]
 ```
 
-`list` merges filesystem discovery with `ir_module_module` state: for each module it
-shows the source repo, the recorded commit, and — with `--db` — the install state in
-that database, plus a Tested column from the whitelist. `search` queries the OCA GitHub
-organization.
-
 #### Install / upgrade
 
 ```bash
-odoo-installer module install <name...> --db DB [--instance NAME] [--allow-untested] [--resolve-deps]
-odoo-installer module upgrade <name...> --db DB [--instance NAME] [--allow-untested] [--resolve-deps]
+odoo-installer module install <name...> --db DB [--instance NAME]
+                            [--allow-untested] [--resolve-deps]
+odoo-installer module upgrade <name...> --db DB [--instance NAME]
+                            [--allow-untested] [--resolve-deps]
 ```
 
-- Runs inside the `web` container:
-  `odoo -d <db> -i/-u <name> --stop-after-init --http-port=8071` (an alternate port so
-  the serving process on 8069 is never disturbed).
-- `--db` is **required** — there is no default database. For experiments use scratch
-  names (`oitest_*`).
-- Refuses modules without a tested.toml entry unless `--allow-untested` is given.
-- **Dependencies are visible in the dry-run:** for `--modules m1,m2`, the plan
-  verifies each module's dependencies (read from GitHub raw manifests, no clone
-  needed) and classifies them: core (verified against the running container),
-  same-repo siblings (included in the sparse clone automatically), other-repo
-  (mounted later by `install --resolve-deps`, provider named in the plan), and
-  already-available. Same-repo siblings always join the sparse clone, so the later
-  install cannot fail with "module not found".
-- **Dependency resolution:** OCA modules often depend on other OCA modules. The CLI
-  reads each target module's `__manifest__.py` deps; deps provided by Odoo core
-  (verified by listing the web container's core addons) or by already-mounted repos
-  just work. A dep whose provider repo is **not** mounted is refused with a clear
-  message — pass `--resolve-deps` to mount the provider repos automatically (per the
-  central whitelist catalog, which records each approved module's repo + deps) and
-  include the deps in the install.
-- Verifies the resulting `ir_module_module` states afterwards and exits 1 if any module
-  is not in `installed` state.
+Runs `odoo -d <db> -i/-u <name> --stop-after-init --http-port=8071` inside the web
+container (never disturbing the serving process). Refuses modules that are not
+whitelisted unless `--allow-untested`, and verifies `ir_module_module` states
+afterwards (exit 1 if any module is not `installed`).
 
-```console
-$ odoo-installer module install web_responsive --db oitest_try
-✔ installed: web_responsive
-```
+**Dependency resolution** — OCA modules often depend on other OCA modules. The CLI
+reads each target's `__manifest__.py`:
+
+- deps provided by **Odoo core** (verified by listing the web container's core
+  addons) or by **already-mounted repos** just work;
+- a dep whose provider repo is **not mounted** is refused with the provider named —
+  add `--resolve-deps` to mount the provider repos automatically (from the whitelist
+  catalog) and include the deps in the install;
+- unknown providers are reported honestly with a `module search` hint.
 
 #### Remove
 
 ```bash
 odoo-installer module remove <repo> [--db DB] [--purge-repo] [--instance NAME]
-                           [--yes] [--apply]
+                             [--yes] [--apply]
 ```
 
-Unmounts the repo and rewrites `addons_path` (with backups). With `--db`, the repo's
-modules are reset to `uninstalled` in that database first. `--purge-repo` also deletes
-the clone directory. Adopted stacks need `--yes` with `--apply`.
+Unmounts, rewrites `addons_path`; `--db` resets the repo's modules to `uninstalled`;
+`--purge-repo` deletes the clone (only clones the CLI owns).
 
 #### Test one module
 
@@ -397,22 +333,9 @@ the clone directory. Adopted stacks need `--yes` with `--apply`.
 odoo-installer module test <name> [--instance NAME] [--keep-db]
 ```
 
-The heart of the whitelist workflow:
-
-1. creates/drops any stale scratch database `oitest_<name>`,
-2. installs the module there,
-3. runs `odoo --test-enable --test-tags=/<name>` inside the web container,
-4. captures the full log to `logs/test-<name>-<ts>.log`,
-5. parses the log into failure kinds (test failure, import error, "not installable",
-   missing manifest, addons_path warning, bare exit code),
-6. prints PASS/FAIL and exits 3 on failure,
-7. on PASS records the module in `tested.toml` (repo, branch, commit, log path).
-
-```console
-$ odoo-installer module test web_responsive
-PASS web_responsive (3.2s) — log: .../logs/test-web_responsive-20260901.log
-✔ web_responsive recorded as tested/installable (whitelist: .../tested.toml)
-```
+Installs on a scratch DB, runs `--test-enable --test-tags=/<name>`, captures the log,
+parses failure kinds, prints PASS/FAIL (exit 3 on failure) and records PASSes in the
+whitelist.
 
 #### Approve already-proven modules
 
@@ -420,223 +343,174 @@ PASS web_responsive (3.2s) — log: .../logs/test-web_responsive-20260901.log
 odoo-installer module approve <name...> --db DB [--instance NAME]
 ```
 
-Records modules in the whitelist **without re-running tests** — the evidence is the
-module's `installed` state in an explicit database (verified before anything is
-written; anything else is refused). Use it on a stack where the module is already
-running in production and you want every machine to treat it as installable.
+For modules whose quality is already proven on a running stack: refuses anything not
+in `installed` state in `--db`, then records the entries in the whitelist — no test
+log required.
 
-### 4.7 `test suite` — batch testing
+### 4.7 `test` — batch testing and central sync
 
 ```bash
 odoo-installer test suite [--instance NAME] [--only REPO] [--modules m1,m2]
                           [--output report.md] [--output report.json] [--keep-db]
+odoo-installer test pull [--apply]
 ```
 
-Tests **every module on the instance's addons_path**, sequentially (Odoo limitation:
-one scratch database at a time), with a fresh `oitest_<module>` scratch DB per module.
-PASSes feed the whitelist. `--only` restricts to one source repo (`web` or `OCA/web`);
-`--modules` pins an explicit list. `--output` is repeatable and writes a Markdown
-and/or JSON report. Exits **3** when any module fails.
+`suite` tests every module on the addons_path sequentially (fresh `oitest_<module>`
+scratch DB each), feeds PASSes into the whitelist, writes repeatable `.md`/`.json`
+reports and exits **3** when anything fails. `--only` filters by source repo.
 
-#### Central whitelist repo (`test pull`)
-
-Point `tested_repo_url` at a small git repo whose root holds a `tested.toml`, then:
-
-```bash
-odoo-installer config set tested_repo_url https://github.com/<org>/odoo-installer-tested.git
-odoo-installer test pull --apply
-```
-
-The pull refreshes a local cache clone and **merges** the repo's entries into the
-active whitelist: union by module name, the newer `tested_at` wins. Approvals made on
-any machine (test PASSes or `module approve`) spread to every machine that pulls — the
-CLI itself never needs updating for new approvals, only the repo does.
-
-```console
-$ odoo-installer test suite --only web --output report.md --output report.json
-[1/12] web_responsive (web)
-PASS web_responsive (3.1s)
-...
-12 modules: 11 passed, 1 failed   → exit 3
-✔ report written: report.md
-✔ report written: report.json
-```
+`pull` syncs the whitelist from the central repo configured in `tested_repo_url`:
+it refreshes a local cache clone and **merges** the repo's `tested.toml` into the
+active whitelist — union by module name, newer `tested_at` wins. Approvals made
+anywhere spread to every machine that pulls; the CLI itself never needs updating for
+new approvals.
 
 ---
 
-## 5. Configuration files and state
+## 5. Files and configuration
 
-All files live under the XDG config dir (`~/.config/odoo-installer/`); all writes are
-atomic (temp file + rename).
+All files live in platformdirs locations; every write is atomic.
 
 | File | Purpose |
 |------|---------|
-| `config.toml` | global user config (see table in §4.3) |
-| `registry.toml` | instance registry: `name → {dir, http_port, created_at, adopted}` |
-| `tested.toml` | installable-addons whitelist: `module → {repo, branch, commit, db, log_path}` |
-| `<stack>/.odoo-installer.json` | per-instance manifest: schema version, odoo version, image, pg tag, added repos `{repo, url, branch, commit, modules, mount}`, adopted flag |
-| `<stack>/repos/<repo>/` | OCA clones — git state is the truth for branch/commit |
+| `~/.config/odoo-installer/config.toml` | global config (§4.3) |
+| `~/.config/odoo-installer/registry.toml` | instance registry |
+| `~/.config/odoo-installer/tested.toml` | installable-addons whitelist |
+| `<stack>/.odoo-installer.json` | per-instance manifest |
+| `<stack>/repos/<repo>/` | OCA clones — git state is the truth |
+| `<stack>/logs/` · `~/.local/state/odoo-installer/logs/<name>/` | test logs (created / adopted stacks) |
 
-Config precedence: **CLI flags > instance manifest > global config.toml > constants.**
+Precedence: **CLI flags > instance manifest > global config.toml > constants.**
 
-GitHub access: the CLI reads a token from the env var named by `github_token_env`
-(default `GITHUB_TOKEN`) to raise rate limits; without a token it degrades gracefully
-to offline discovery.
+GitHub tokens: read from the env var named by `github_token_env` (default
+`GITHUB_TOKEN`); without one, discovery degrades gracefully.
 
 ---
 
-## 6. Common workflows
+## 6. Recipes
 
-### 6.1 Bootstrap a new machine
+### 6.1 Bootstrap a machine
 
 ```bash
-odoo-installer doctor                # verify the host (exit 4 = fix first)
-odoo-installer install               # dry-run: what would be installed
-odoo-installer install --apply       # docker engine, compose plugin, git
-odoo-installer doctor                # should be all green now
+odoo-installer doctor && odoo-installer install --apply && odoo-installer doctor
 ```
 
-### 6.2 A fresh dev instance with an OCA module, the manual way
+### 6.2 Fresh dev instance with an OCA module
 
 ```bash
 odoo-installer instance create dev --apply
 odoo-installer db create odoo --instance dev
-
-odoo-installer module search "responsive"
 odoo-installer module add web --sparse --modules web_responsive --apply
-odoo-installer module test web_responsive      # scratch DB, PASS → whitelist
+odoo-installer module test web_responsive
 odoo-installer module install web_responsive --db odoo
 ```
 
-Each step is decomposable and idempotent — if anything fails you can fix and re-run
-just that step.
-
-### 6.3 Work on your fork of an OCA repo
+### 6.3 Work from your fork
 
 ```bash
 odoo-installer module add server-tools --fork myuser --apply
-# origin = https://github.com/myuser/server-tools.git, upstream = OCA
 ```
 
-### 6.4 Use your existing local checkout (worktree pattern)
+### 6.4 Mount your own checkout (never mutated)
 
 ```bash
 odoo-installer module add web --repo ~/dev/web-deploy --apply
-# mounts the checkout as-is; the CLI never switches its branch
 ```
 
-### 6.5 Full installability report for a stack
+### 6.5 Full installability report
 
 ```bash
 odoo-installer test suite --output report.md --output report.json
-# exit 3 when any module fails; PASSes are whitelisted
 ```
 
-### 6.6 Adopt the production stack and inspect it safely
+### 6.6 Adopt production, inspect safely
 
 ```bash
 odoo-installer instance adopt ~/Projects/my-odoo --apply
-odoo-installer db list --instance my-odoo         # must match psql -l
-odoo-installer module list --instance my-odoo --db odoo
-odoo-installer module test web_responsive         # scratch DB only, never the odoo DB
+odoo-installer db list --instance my-odoo
+odoo-installer module approve attribute_set pim --db odoo   # proven modules → whitelist
 ```
 
-Read-mostly commands plus scratch-DB testing only — the adopted stack's files and the
-production `odoo` database are never touched without explicit, guarded actions.
-
-### 6.7 Upgrading modules safely
+### 6.7 Share approvals across machines
 
 ```bash
-odoo-installer module test my_module --keep-db          # verify on a scratch DB first
-odoo-installer module upgrade my_module --db odoo       # only if PASSed the whitelist
+# 1) on the proven stack: record approvals
+oii module approve attribute_set pim product_attribute_set --db odoo
+# 2) push the whitelist to the central repo (tested.toml at its root)
+# 3) everywhere else:
+oii config set tested_repo_url https://github.com/<org>/odoo-installer-tested.git
+oii test pull --apply
+```
+
+### 6.8 Upgrade with confidence
+
+```bash
+oii module test my_module --keep-db          # prove it on a scratch DB
+oii module upgrade my_module --db odoo       # only whitelisted modules get through
 ```
 
 ---
 
-## 7. Safety rules and exit codes
+## 7. Safety and exit codes
 
-- **Plan-first:** `install`, `instance create/remove`, `module add/remove`,
-  `db drop/reset` print a numbered plan and require `--apply` (plus `--yes` for
-  destructive prompts) to execute.
-- **Idempotency:** every step checks current state first (package installed? repo
-  cloned at the right commit? addons_path already contains the entry?) and reports
-  `already satisfied` instead of redoing work.
-- **Explicit database names:** the CLI never invents a database name.
-- **Adopted stacks:** never rewritten without `--yes`, never recreated by the CLI
-  (the one exception: explicit `instance remove --apply --yes`).
-- **Scratch DBs:** `oitest_*` names, dropped after use unless `--keep-db`.
-
-Exit codes:
+- Plan-first on every mutation; live `[i/n]` progress while applying.
+- Idempotent re-runs report `already satisfied` instead of redoing work.
+- Explicit database names, always.
+- Adopted stacks: never rewritten without `--yes`, never recreated by the CLI.
+- Scratch DBs (`oitest_*`) are dropped unless `--keep-db`.
 
 | Code | Meaning |
 |------|---------|
 | 0 | success |
-| 1 | runtime error (e.g. module not installed, plan step failed) |
-| 2 | usage error (Typer default) |
+| 1 | runtime error |
+| 2 | usage error (Typer) |
 | 3 | test failures (`module test`, `test suite`) |
-| 4 | `doctor` found a critical check failure |
-
-Scripts can rely on these codes, e.g. `odoo-installer doctor || exit 1` style gating,
-or treating 3 as "fix the module".
+| 4 | `doctor` critical check failed |
 
 ---
 
 ## 8. Troubleshooting
 
-**`doctor` exits 4.**
-Read the FAIL row — it names the check and a fix hint. Common cases: missing compose
-plugin, user not in the `docker` group, port range occupied.
+**`doctor` exits 4.** Read the FAIL row — it names the check and a fix hint. Common
+causes: missing compose plugin, user not in the `docker` group, port range occupied.
 
-**"module ... not visible to this instance; run 'module add' first".**
-The module is not on the instance's addons_path. `module add` the repo (or mount your
-checkout with `--repo`).
+**"modules not visible to this instance; run 'module add' first".** The module is not
+on the addons_path — `module add` its repo (or `--repo` your checkout).
 
-**"not tested yet: ... — run 'module test <name>' first".**
-The tested.toml whitelist has no entry for the module. Run `module test <name>` (or
-`test suite`), or bypass deliberately with `--allow-untested`.
+**"not tested yet: ...".** The whitelist has no entry — run `module test <name>`, or
+pass `--allow-untested` deliberately.
 
-**"repo ... has no 19.0 branch".**
-The OCA repo does not carry a 19.0 branch. Either wait for it or point `--repo` at a
-checkout you prepared yourself.
+**"branch '19.0' does not exist on OCA/<name>"** — with a hint. If you passed a module
+name instead of a repo, the hint names the providing repo and the exact command.
+Otherwise check the spelling or `module search <name>`.
 
-**GitHub rate limiting / empty search results.**
-Set a token: `export GITHUB_TOKEN=ghp_...` (or the env var named in your
-`github_token_env` config) and retry. Without a token, offline discovery still works.
+**"missing OCA dependencies need mounting: ...".** The dependency resolver found
+provider repos that are not mounted. Re-run with `--resolve-deps` to mount them
+automatically (they must be whitelisted — `test pull` first if the approvals live in
+the central repo).
 
-**Port already taken.**
-`instance create` auto-picks the first free port in 8069–8099 — but a *stopped* stack
-does not reserve its port, so two instances can end up registered on the same one. Start
-them one at a time, pin a port with `--http-port`, or widen the range via
-`config set port_range_end ...`.
+**GitHub rate limiting / empty search results.** Set a token (`GITHUB_TOKEN` or the
+env var named by `github_token_env`).
 
-**Adopted stack says "recreate it with your own tooling".**
-After `module add --yes` on an adopted stack, the CLI updates the files but never
-recreates containers — recreate the web service yourself (e.g. `docker compose up -d
-web`; a plain restart would not mount the new volume).
+**Port already taken.** A stopped stack does not reserve its port — two instances can
+share one. Start them one at a time, pin `--http-port`, or widen the range.
 
-**A module installed but Odoo reports it uninstalled.**
-`module install` verifies `ir_module_module` states and exits 1 listing the offenders —
-check the last lines of the captured output (shown dimmed) and the module's
-dependencies.
+**"recreate it with your own tooling".** After `module add --yes` on an adopted stack,
+recreate the web service yourself (`docker compose up -d web`) — a plain restart would
+not mount the new volume.
 
-**The database manager asks for a master password — where is it?**
-Nothing fills that field for you: the official `odoo` image provides the master
-password through **no environment variable** (its entrypoint only wires the DB
-connection vars, and the shipped default config has `admin_passwd` commented out), and
-Odoo never pre-fills the form server-side. What looks like a pre-filled field is your
-browser's saved-password autofill. `instance create` generates a random master password
-and stores it in `<stack>/.env` (`ADMIN_PASSWD=...`) and in
-`<stack>/config/odoo.conf` (`admin_passwd = ...`). Read it with the CLI:
-`odoo-installer instance secret <name>` (or `--key POSTGRES_PASSWORD` for the DB
-password). To set your own, edit `admin_passwd` in `config/odoo.conf` (and `.env` for
-consistency) and run `odoo-installer instance restart <name>`.
+**A module installed but Odoo reports it uninstalled.** `module install` verifies
+`ir_module_module` states and exits 1 listing the offenders — check the dimmed output
+tail and the module's dependencies.
 
-**Two instances want the same port (8069).**
-Port auto-allocation picks the first port that is free *right now* — a stopped stack
-does not reserve its port. If two registered instances share a port, start them one at
-a time, or recreate one on another port (e.g. `instance create <name> --http-port 8070`).
+**The database manager asks for a master password.** Nothing pre-fills that field:
+the official `odoo` image passes no master password via env, and the shipped default
+config has `admin_passwd` commented out. Read yours with
+`odoo-installer instance secret <name>`; set your own by editing `admin_passwd` in
+`config/odoo.conf` (and `.env`) then `instance restart`.
 
-**Where are the test logs?**
-Created instances: `<stack>/logs/test-<module>-<ts>.log`. Adopted instances:
-`~/.local/state/odoo-installer/logs/<name>/` (XDG state dir — the CLI never writes into
-adopted stacks).
+**Two instances want the same port.** See "Port already taken" — and remember a
+stopped stack does not reserve its port.
+
+**Where are the test logs?** Created instances: `<stack>/logs/`. Adopted instances:
+`~/.local/state/odoo-installer/logs/<name>/`.

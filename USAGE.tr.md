@@ -1,110 +1,106 @@
 # odoo-installer — Kullanım Kılavuzu
 
-`odoo-installer` ile **Odoo 19.0 Docker stack'lerini** kurmak, yapılandırmak ve
-yönetmek için ayrıntılı, pratik bir rehber — doğru-dallı OCA modül yönetimi ve otomatik
-kurulabilirlik testleri dahil.
+> **0.6.0+ sürümleri içindir** · [English](USAGE.md) olarak da okuyabilirsiniz
+>
+> Mimari, tasarım kararları ve geliştirme planı [DEVELOPMENT.md](DEVELOPMENT.md)'dedir.
 
-Mimari, tasarım kararları ve geliştirme planı için bkz.
-[DEVELOPMENT.md](DEVELOPMENT.md). Bu kılavuz, komutları v0.1.x'teki gerçek
-davranışlarıyla anlatır.
+`odoo-installer`, Odoo 19.0 filonuz için tek bir CLI'dır — Docker stack'lerini kurar ve
+yönetir, OCA modüllerini doğru daldan ekler, modüller yayına girmeden önce kanıtını
+ister ve onayları kullandığınız her makineye yayar. Değiştirdiği her şeyi önce size
+gösterir.
 
 ---
 
 ## İçindekiler
 
-1. [Araç ne yapar, ne yapmaz](#1-araç-ne-yapar-ne-yapmaz)
+1. [Bir bakışta](#1-bir-bakışta)
 2. [Kurulum](#2-kurulum)
-3. [Temel kavramlar](#3-temel-kavramlar)
+3. [Nasıl düşünür](#3-nasıl-düşünür)
 4. [Komut başvurusu](#4-komut-başvurusu)
-5. [Yapılandırma dosyaları ve durum](#5-yapılandırma-dosyaları-ve-durum)
-6. [Yaygın iş akışları](#6-yaygın-iş-akışları)
-7. [Güvenlik kuralları ve çıkış kodları](#7-güvenlik-kuralları-ve-çıkış-kodları)
+5. [Dosyalar ve yapılandırma](#5-dosyalar-ve-yapılandırma)
+6. [Tarifler](#6-tarifler)
+7. [Güvenlik ve çıkış kodları](#7-güvenlik-ve-çıkış-kodları)
 8. [Sorun giderme](#8-sorun-giderme)
 
 ---
 
-## 1. Araç ne yapar, ne yapmaz
+## 1. Bir bakışta
 
-`odoo-installer`, Odoo 19.0'ı **yalnızca Docker üzerinden** yönetir. Odoo'yu asla
-host'a yerel (native) kurmaz: her instance, CLI tarafından üretilen, başlatılan ve
-yönetilen bir `docker compose` stack'idir (bir `web` + bir `db` servisi). Üzerine şunları
-ekler:
+| Komut ailesi | Sağladığı şey |
+|--------------|---------------|
+| `doctor` | Anında host teşhisi — docker, compose, git, disk, portlar, GitHub erişimi |
+| `install` | pacman/apt ile host ön gereksinimleri — Odoo'nun kendisi **asla** host'a kurulmaz |
+| `config` | Doğrulanmış, atomik genel yapılandırma |
+| `instance` | Tam stack yaşam döngüsü: create, mevcut stack'i adopt etme, start/stop, secret, remove |
+| `db` | Stack'in kendi postgres konteyneri üzerinden DB işlemleri |
+| `module` | OCA depoları ve modülleri: bağımlılık görünümlü add, list, search, install, upgrade, remove, test, approve |
+| `test` | Raporlu toplu test süitleri + merkezi whitelist senkronu |
 
-- **OCA modül yönetimi** — OCA depolarını doğrulanmış `origin/19.0` dalında klonlar,
-  stack'e mount eder ve `addons_path`'i sizin için yeniden yazar.
-- **Kurulabilirlik testi** — her modülü tek kullanımlık (scratch) bir veritabanına
-  kurar, testlerini konteyner içinde çalıştırır, logu ayrıştırır ve PASS sonuçlarını
-  kurulabilir-modüller beyaz listesine kaydeder. `module install` test edilmemiş
-  modülleri reddeder.
-- **Plan-önce güvenliği** — her yıkıcı veya sistemi değiştiren komut, tam olarak ne
-  yapacağını yazdırır ve `--apply` vermediğiniz sürece (yıkıcı onaylar için ayrıca
-  `--yes`) hiçbir şey yapmadan çıkar. Tekrar çalıştırmalar idempotenttir.
+Hem test hem üretim barındıran bir makinede güvenli kullanımı sağlayan üç fikir:
 
-**Kapsam dışı (v1):** yerel (Docker'sız) Odoo, başka Odoo sürümleri, GUI/TUI,
-veritabanı yedekleme/geri yükleme, SMTP sihirbazı, reverse-proxy/TLS üretimi.
-
-### Gereksinimler
-
-- Python ≥ 3.11
-- Docker engine + `compose` eklentisi
-- `git`
-- Linux host (referans platform Arch Linux; Debian/Ubuntu paket adaptörleri mevcut
-  ancak daha az denenmiş durumda)
-
-Host'unuzu doğrulamak için `odoo-installer doctor` çalıştırın.
+- **Plan-önce** — her mutasyon tam planını yazdırır ve yalnızca `--apply` ile çalışır
+  (yıkıcı işlemlerde ayrıca `--yes`). Uygulanan planlar canlı `[i/n]` ilerleme gösterir.
+- **Test-edilmiş kurulumlar** — `module install`, gerçek bir testten geçmemiş ya da
+  açıkça onaylanmamış modülleri reddeder.
+- **Açık veritabanı adları** — CLI hiçbir zaman sizin yerinize veritabanı seçmez.
 
 ---
 
 ## 2. Kurulum
 
 ```bash
-pip install odoo-installer            # PyPI'dan (0.1.1+)
+pip install odoo-installer            # PyPI'dan
 # veya checkout'tan:
 pip install .
 # veya geliştirme için:
 pip install -e ".[dev]"
 ```
 
-Kabuk tamamlamayı etkinleştirin (bash/zsh/fish):
+Günlük kullanım için izole kurulum (dev venv ile karıştırmaktan iyidir):
 
 ```bash
-odoo-installer --install-completion
+pipx install odoo-installer           # veya: uv tool install odoo-installer
 ```
 
-CLI ayrıca `oii` kısa adıyla ve `python -m odoo_installer` ile kullanılabilir.
+Kabuk tamamlama (bash/zsh/fish): `odoo-installer --install-completion`.
+
+CLI üç isimle çalışar: `odoo-installer`, `oii` ve `python -m odoo_installer`.
+
+> 💡 **Güncelleme:** `pip install -U odoo-installer` (veya `pipx upgrade
+> odoo-installer`). Sürüm hemen ardından pip "already satisfied" derse bir çalıştırmalık
+> sürümü sabitleyin — `pip install "odoo-installer==X.Y.Z"` — indeks önbelleği PyPI'ın
+> birkaç dakika gerisinde kalabilir.
 
 ---
 
-## 3. Temel kavramlar
+## 3. Nasıl düşünür
 
 ### 3.1 Instance'lar
 
-Bir **instance**, kendi dizininde duran tek bir Odoo stack'idir (varsayılan kök:
-`~/odoo-instances/`). Her instance şunları içerir:
+Bir **instance**, kendi dizininde duran tek bir Odoo stack'idir (varsayılan kök
+`~/odoo-instances/`):
 
 ```text
 ~/odoo-instances/<ad>/
 ├── docker-compose.yml       # şablonlardan üretilir
 ├── .env                     # imaj, pg tag, http portu, üretilen sırlar
 ├── config/odoo.conf         # addons_path, `module add` ile yeniden yazılır
-├── addons/local/            # kendi modülleriniz (/mnt/extra-addons olarak mount edilir)
-├── repos/<oca-repo>/        # OCA klonları (her biri /mnt/oca/<repo> olarak mount edilir)
+├── addons/local/            # kendi modülleriniz → /mnt/extra-addons
+├── repos/<oca-repo>/        # OCA klonları → /mnt/oca/<repo>
 ├── logs/                    # yakalanan test logları (test-<modül>-<ts>.log)
 └── .odoo-installer.json     # instance manifest'i
 ```
 
-`db` servisi host üzerinde **yayınlanmaz** — tüm veritabanı erişimi stack üzerinden
+`db` servisi host üzerinde hiç yayınlanmaz — tüm veritabanı erişimi stack üzerinden
 (`db` konteynerindeki psql) yapılır.
 
-### 3.2 Plan-önce (varsayılan dry-run)
+### 3.2 Plan-önce, canlı ilerlemeyle
 
 Bir şeyi değiştiren komutlar (`install`, `instance create/remove`, `module add/remove`,
-`db drop/reset`) tam komut ve dosya yazma listesini numaralı bir plan olarak yazdırır ve
-`--apply` verene kadar **hiçbir şey uygulamadan** 0 koduyla çıkar. Yıkıcı işlemler
-ayrıca `--yes` ister. Yazdırılan plan, uygulanan kod yoluyla birebir aynıdır — dry-run
-tasarım gereği kusursuzdur. Plan uygulandığında her adım canlı olarak
-`[i/n] açıklama` biçiminde ve ardından sonucuyla duyurulur; hangi aşamada olduğunuz her
-zaman görünür:
+`db drop/reset`) tam komut ve dosya yazma listesini numaralı plan olarak yazdırır ve
+`--apply` (yıkıcı işlemlerde ayrıca `--yes`) verene kadar **hiçbir şey yapmadan** çıkar.
+Yazdırılan plan, uygulanan kod yoluyla birebir aynıdır. Plan çalışırken her adım anında
+duyurulur:
 
 ```console
 $ odoo-installer instance create dev --apply
@@ -120,39 +116,36 @@ $ odoo-installer instance create dev --apply
 
 ### 3.3 Sahiplenilen (adopted) stack'ler
 
-`instance adopt <dizin>` komutu, **mevcut** bir compose stack'ini (ör. aracı kullanmadan
-önce elle kurduğunuz bir stack) dosyalarını yeniden yazmadan kaydeder. Sahiplenilen
+`instance adopt <dizin>`, **mevcut** bir compose stack'ini (yalnızca konteyner
+etiketlerinden tespit edilir) dosyalarını yeniden yazmadan kaydeder. Sahiplenilen
 stack'ler **okuma-ağırlıklı** yönetilir:
 
-- `start/stop/restart`, `exec`, `psql` ve log erişimi normal çalışır.
-- `start`, `docker compose start` kullanır — stack asla yeniden oluşturulmaz.
-- Dosya değişiklikleri (ör. `module add` ile mount eklemek) açık `--yes` gerektirir ve
-  CLI sahiplenilen stack'i **asla yeniden yaratmaz** — konteynerleri kendiniz
-  yeniden yaratmanızı (`docker compose up -d web`) söyler.
-- Tek mutasyon istisnası `instance remove --apply --yes`'tır: stack'i söker ve
-  dizinini siler (bkz. §4.4).
+- `start/stop/restart`, `exec`, `psql` ve log erişimi normal çalışır;
+- `start`, `docker compose start` kullanır — stack asla yeniden yaratılmaz;
+- dosya değişiklikleri (ör. `module add` ile mount eklemek) açık `--yes` ister ve CLI
+  konteynerleri asla yeniden yaratmaz — bunu size bırakır;
+- tek mutasyon istisnası `instance remove --apply --yes`'tır: stack'i söker
+  (`--remove-data` ile named volume'lerini de siler) ve dizinini kaldırır.
 
-### 3.4 Test edilmiş modüller beyaz listesi
+### 3.4 Whitelist — test edilen kurulabilir
 
-`module test` ve `test suite`, her PASS'i
-`~/.config/odoo-installer/tested.toml` dosyasına kaydeder (modül → repo, dal, commit,
-veritabanı, log yolu). `module install`/`module upgrade`, beyaz listede kaydı olmayan
-her modülü `--allow-untested` vermediğiniz sürece **reddeder**. Bu, aracın sözleşmesidir:
-yalnızca test edilen modüller kurulabilir.
+`module test` ve `test suite`, her modülü tek kullanımlık bir **scratch
+veritabanına** (`oitest_<modül>`, `--keep-db` olmadıkça sonra silinir) kurar,
+testlerini konteyner içinde çalıştırır ve her PASS'i whitelist'e
+(`~/.config/odoo-installer/tested.toml`) kaydeder. `module install` / `module upgrade`,
+whitelist'te olmayan her şeyi `--allow-untested` vermediğiniz sürece reddeder.
+Sözleşme budur: **yalnızca kanıtlanmış modüller kurulur.**
 
-### 3.5 Scratch veritabanları
-
-`module test` ve `test suite` gerçek veritabanlarınıza asla dokunmaz. Her modül,
-`oitest_<modül>` adlı tek kullanımlık bir veritabanında test edilir; `--keep-db`
-vermediğiniz sürece test sonunda silinir. Veritabanı adları **her zaman açık** CLI
-argümanıdır — varsayılan veritabanı diye bir şey yoktur.
+Whitelist aynı zamanda **taşınabilirdir** — bkz.
+[§4.7](#47-test--toplu-test-ve-merkezi-senkron): küçük bir git reposu onayları her
+makineye taşır; `module approve`, çalışan bir stack'te kanıtlanmış modülleri kaydeder.
 
 ---
 
 ## 4. Komut başvurusu
 
-Genel seçenekler: `--version` / `-V` (sürümü göster ve çık), her yerde `--help`.
-Ayrıca yalnızca sürüm numarasını basan bir `version` komutu vardır.
+Genel: `--version` / `-V`, her yerde `--help`; ayrıca yalnızca sürümü basan bir
+`version` komutu.
 
 ### 4.1 `doctor` — host teşhisi
 
@@ -160,14 +153,9 @@ Ayrıca yalnızca sürüm numarasını basan bir `version` komutu vardır.
 odoo-installer doctor [--json]
 ```
 
-Kontroller: docker engine, compose eklentisi, docker grubu üyeliği, git, instance
-kökündeki disk alanı, yapılandırılan aralıktaki (8069–8099) port durumu ve github.com
-erişilebilirliği. Tablo (veya JSON) basar; kritik bir kontrol başarısızsa **4 koduyla**
-çıkar.
-
-```console
-$ odoo-installer doctor --json | head
-```
+Docker engine, compose eklentisi, docker grubu üyeliği, git, instance kökündeki disk
+alanı, yapılandırılan aralıktaki port durumu ve github.com erişilebilirliğini kontrol
+eder. Kritik kontrol başarısızsa **4** koduyla çıkar.
 
 ### 4.2 `install` — host ön gereksinimleri
 
@@ -175,80 +163,60 @@ $ odoo-installer doctor --json | head
 odoo-installer install [--apply]
 ```
 
-**Yalnızca host ön gereksinimlerini** kurar — docker engine, compose eklentisi ve git —
-pacman (Arch) veya apt (Debian/Ubuntu) üzerinden. Odoo'nun kendisini asla kurmaz; onun
-için stack'ler var. `--apply` olmadan planı yazdırır; `--apply` ile uygular. Gereksinimler
-karşılanmışsa "yapılacak bir şey yok" der (tekrar çalıştırmalar no-op'tur).
+Docker engine, compose eklentisi ve git'i pacman (Arch) veya apt (Debian/Ubuntu) ile
+kurar. Odoo'nun kendisini asla kurmaz. Idempotent — karşılanmış host no-op'tur.
 
 ### 4.3 `config` — genel yapılandırma
 
 ```bash
-odoo-installer config show [--json]        # çözümlenmiş yapılandırma
-odoo-installer config set <anahtar> <değer>  # tek anahtar ata (doğrulanır)
-odoo-installer config edit                 # $VISUAL/$EDITOR ile yerinde düzenle, doğrulanır
-odoo-installer config path                 # yapılandırma dosyası yolunu yazdır
+odoo-installer config show [--json]
+odoo-installer config set <anahtar> <değer>
+odoo-installer config edit          # $VISUAL/$EDITOR, kaydetmeden önce doğrular
+odoo-installer config path
 ```
-
-Anahtarlar ve varsayılanlar (tam tablo §5.1'de):
 
 | Anahtar | Varsayılan | Anlamı |
 |---------|-----------|--------|
-| `instances_root` | `~/odoo-instances` | yeni stack'lerin oluşturulacağı yer |
-| `repo_root` | `~/odoo-repos` | sahiplenilen stack'ler için OCA klonlarının yeri |
+| `instances_root` | `~/odoo-instances` | yeni stack'lerin yeri |
+| `repo_root` | `~/odoo-repos` | sahiplenilen stack'ler için OCA klonları |
 | `default_pg_tag` | `17` | postgres imaj etiketi |
-| `port_range_start` / `port_range_end` | `8069` / `8099` | otomatik port atama aralığı (≥ 1024 olmalı) |
-| `github_token_env` | `GITHUB_TOKEN` | GitHub token'ını tutan ortam değişkeni adı |
+| `port_range_start` / `port_range_end` | `8069` / `8099` | otomatik port aralığı (≥ 1024) |
+| `github_token_env` | `GITHUB_TOKEN` | GitHub token'ını tutan ortam değişkeni |
+| `tested_repo_url` | *(boş)* | merkezi whitelist reposu (bkz. §4.7) |
 
-Bilinmeyen anahtarlar reddedilir — `config.toml`'daki yazım hataları sessizce
-yutulmaz, yüksek sesle hata verir. `set` değerleri pydantic ile dönüştürüp doğrular;
-`edit` kaydetmeden önce sonucu doğrular, geçersizse hiçbir şey yazmaz.
-
-```bash
-odoo-installer config set port_range_end 8095
-odoo-installer config set github_token_env GH_TOKEN
-```
+Bilinmeyen anahtarlar reddedilir; `set` değerleri doğrular; `edit` sonucu doğrular,
+geçersizse hiçbir şey yazmaz.
 
 ### 4.4 `instance` — stack yaşam döngüsü
 
 #### Oluşturma
 
 ```bash
-odoo-installer instance create <ad> [--dir YOL] [--http-port N] [--image ETIKET]
+odoo-installer instance create <ad> [--dir YOL] [--http-port N] [--image ETİKET]
                             [--pg-tag N] [--apply]
 ```
 
-Eksiksiz stack'i üretir (`docker-compose.yml`, `.env`, `config/odoo.conf`),
-`docker compose up -d` ile başlatır, `/web/health`'i bekler ve instance'ı kaydeder.
+Stack'i üretir, başlatır, `/web/health`'i bekler, instance'ı kaydeder.
 
-- **Port:** `--http-port` verilmezse yapılandırılan aralıktaki (8069–8099) ilk boş port.
-  Atanan port manifest'e sabitlenir, tekrar çalıştırmalar aynı portu korur.
-- **Sırlar:** postgres ve admin şifreleri ilk çalıştırmada üretilir ve `.env`'de
-  saklanır — tekrar çalıştırmalar onları asla değiştirmez.
-- **Idempotency:** var olan sağlıklı bir instance için `create` yeniden çalıştırılırsa
-  no-op'tur.
-- Varsayılan imaj `odoo:19.0`; `--image` ile değiştirilebilir (manifest'e kaydedilir).
-
-```console
-$ odoo-installer instance create dev            # dry-run: planı yazdırır
-$ odoo-installer instance create dev --apply    # uygular
-✔ instance 'dev' hazır: http://localhost:8069
-```
+- **Port:** yapılandırılan aralıktaki ilk boş port — *durdurulmuş* bir stack portunu
+  rezerve etmez, iki instance aynı portu paylaşabilir; `--http-port` ile sabitleyin.
+- **Sırlar:** postgres ve admin şifreleri bir kez üretilip kalıcılaşır. Master
+  password `config/odoo.conf`'a (`admin_passwd`) yazılır ve `.env`'de
+  (`ADMIN_PASSWD`) saklanır — resmi odoo imajı master password'ü hiçbir ortam
+  değişkeniyle sağlamaz ve veritabanı yöneticisi alanı asla ön-doldurmaz.
 
 #### Listele / göster / secret / yaşam döngüsü
 
 ```bash
 odoo-installer instance list
-odoo-installer instance show <ad>        # manifest ayrıntıları + docker compose ps
-odoo-installer instance secret <ad> [--key ANAHTAR]   # .env'den bir sır yazdırır
-odoo-installer instance start <ad>       # oluşturulan: up -d · sahiplenilen: compose start
-odoo-installer instance stop <ad>        # docker compose stop
-odoo-installer instance restart <ad>     # docker compose restart
+odoo-installer instance show <ad>
+odoo-installer instance secret <ad> [--key ANAHTAR]
+odoo-installer instance start|stop|restart <ad>
 ```
 
-`secret`, instance'ın `.env`'inden tek bir değeri kendi satırında (düz metin, pipe'a
-uygun) yazdırır. Varsayılan anahtar `ADMIN_PASSWD` — Odoo master password'ü;
-`POSTGRES_PASSWORD` gibi diğer anahtarlar `--key` ile okunur. Olmayan anahtar, uygun
-anahtarları listeleyen açık bir hatadır.
+`secret`, instance'ın `.env`'inden tek bir değeri kendi satırında yazdırır
+(varsayılan: `ADMIN_PASSWD` — master password; örn. `--key POSTGRES_PASSWORD`).
+Olmayan anahtar, uygun anahtarları listeleyen açık bir hatadır.
 
 #### Silme
 
@@ -256,13 +224,10 @@ anahtarları listeleyen açık bir hatadır.
 odoo-installer instance remove <ad> [--remove-data] [--yes] [--apply]
 ```
 
-Varsayılan dry-run; yalnızca `--apply --yes` ile uygulanır. Varsayılan olarak stack'in
-data volume'leri (ve onlarla birlikte veritabanlarınız) **korunur**; `--remove-data`,
-compose dosyasında tanımlı named volume'leri yok eder (`docker compose down -v`);
-bind-mount edilmiş veriler stack diziniyle birlikte gider. **Sahiplenilen stack'ler için
-de çalışır** — kaldırma, onlar üzerinde izin verilen tek açıkça onaylanmış yıkıcı
-işlemdir. Instance'ı yeniden oluşturduğunuzda, açıkça istemediyseniz verileriniz
-yerinde kalır.
+Varsayılan dry-run; yalnızca `--apply --yes` ile çalışır. Volume'ler `--remove-data`
+verilmedikçe **korunur** (o durumda compose dosyasında tanımlı named volume'ler yok
+edilir). **Sahiplenilen stack'ler için de çalışır** — kaldırma, onlar üzerinde izin
+verilen tek açıkça onaylanmış mutasyondur.
 
 #### Mevcut bir stack'i sahiplenme
 
@@ -270,43 +235,20 @@ yerinde kalır.
 odoo-installer instance adopt <dizin> [--name AD] [--db-user odoo] [--apply]
 ```
 
-Stack'i yalnızca konteyner etiketlerinden tespit eder (compose projesi, web/db
-servisleri, imajlar, yayınlanan port), yalnızca odoo-installer manifest'ini ve registry
-kaydını yazar; stack dosyalarını asla yeniden yazmaz. Okuma-ağırlıklı kurallar için bkz.
-§3.3.
-
-```console
-$ odoo-installer instance adopt ~/Projects/my-odoo --apply
-tespit edildi: proje my-odoo, web servisi web (odoo:19.0) port 8069, ...
-✔ instance 'my-odoo' sahiplenildi (okuma-ağırlıklı)
-```
-
 ### 4.5 `db` — veritabanları
 
-Tüm veritabanı işlemleri instance'ın `db` konteynerindeki psql üzerinden yürütülür.
-Veritabanı adı **her zaman** açık pozisyonel argümandır.
-
 ```bash
-odoo-installer db list [--instance AD]                    # adlar + boyutlar
-odoo-installer db create <db> [--instance AD]             # idempotent
+odoo-installer db list [--instance AD]
+odoo-installer db create <db> [--instance AD]           # idempotent
 odoo-installer db drop <db> [--instance AD] [--yes] [--apply]
 odoo-installer db reset <db> [--instance AD] [--yes] [--apply]
 ```
 
-- `create`, veritabanı zaten varsa `already exists` der.
-- `drop`/`reset` plan-öncedir; yalnızca `--apply --yes` ile uygulanır. Dry-run'da kırmızı
-  uyarı yazdırır.
-- `reset` = sil + yeniden oluştur (boş veritabanı).
-- Korunan `postgres`, `template0` ve `template1` veritabanları reddedilir.
-- `--instance`, tek kayıtlı instance varsa varsayılandır; birden fazla kayıtlı
-  instance varsa verilmesi zorunludur.
+Instance'ın `db` konteynerindeki psql ile yürütülür. Veritabanı adları her zaman
+açıktır; `postgres`/`template0`/`template1` reddedilir; `drop`/`reset` için
+`--apply --yes` gerekir.
 
-```console
-$ odoo-installer db create odoo --instance dev
-✔ veritabanı 'odoo': oluşturuldu
-```
-
-### 4.6 `module` — OCA depoları ve modüller
+### 4.6 `module` — OCA depoları ve modülleri
 
 #### Depo ekleme
 
@@ -315,29 +257,37 @@ odoo-installer module add <oca-repo> [--modules m1,m2] [--sparse] [--repo YOL]
                          [--fork KULLANICI] [--instance AD] [--yes] [--apply]
 ```
 
-- `<oca-repo>`, `server-tools` veya `OCA/server-tools` biçiminde olabilir.
-- **19.0 dalı klonlamadan önce GitHub API üzerinden doğrulanır** — `19.0` dalı olmayan
-  bir depo açık bir hatadır. Araç asla tahmin etmez, `master`'a düşmez.
-- Klonlar sığ ve tek dallıdır (`--depth 1 --branch 19.0`).
-- `--modules m1,m2`: yalnızca bu modülleri kaydet (depo yine de tam mount edilir —
-  `--sparse` kullanılmadıkça).
-- `--sparse`: **blob-filtreli kısmi klon** (`git clone --filter=blob:none --sparse`) —
-  yalnızca istenen modüller indirilir; OCA/web gibi dev depolar birkaç megabyte'a
-  iner. Plan, sparse kapsamını açıkça duyurur.
-- `--repo YOL`: klonlamak yerine **mevcut yerel checkout'u** mount et. CLI, sahibi
-  olmadığı bir checkout'ta asla dal değiştirmez veya dosya değiştirmez.
-- `--fork KULLANICI`: fork'unuzdan klonlar (`origin` = fork'unuz, `upstream` = OCA).
-- Sonrasında CLI, compose volume'ünü + `addons_path` girdisini ekler (otomatik
-  yedekler ve `docker compose config` doğrulamasıyla) ve oluşturduğu stack'lerde
-  `web`'i **yeniden yaratır** (`docker compose up -d` — sıradan bir restart yeni
-  volume mount'unu uygulamaz). Sahiplenilen stack'lerde `--yes` ister ve yeniden
-  yaratmayı size bırakır.
+- Argüman bir **repo**'dur (`web`, `OCA/server-tools`) — modül adı değil. 19.0 dalı
+  klonlamadan önce GitHub API ile doğrulanır; yanlışlıkla modül adı verilirse
+  sağlayıcı repoyu söyleyen bir ipucu alırsınız.
+- `--modules m1,m2` yalnızca bu modülleri kaydeder — ve plan **bağımlılıklarını
+  doğrulayıp gösterir** (GitHub raw manifest'lerinden sınıflandırılır):
 
-```console
-$ odoo-installer module add web --sparse --modules web_responsive --apply
-repo web, dal 19.0 -> ~/odoo-instances/dev/repos/web:/mnt/oca/web
-✔ web eklendi
-```
+  ```console
+  $ odoo-installer module add web --sparse --modules web_responsive
+  ...
+  3. → verify dependencies of web_responsive
+       (core: base, web, mail, web_tour · already available: —)
+  ```
+
+  - **core** — çalışan konteynerin core addons dizini listelenerek doğrulanır;
+  - **same-repo** — aynı repodaki kardeş modüller; otomatik olarak sparse klona
+    katılırlar, sonraki kurulum "module not found" ile düşemez;
+  - **other-repo** — sağlayıcı repo planda yazar; `install --resolve-deps` tarafından
+    mount edilir;
+  - **already available** — local addons veya başka bir mount'lu repo tarafından
+    sağlanıyor.
+- `--sparse` **blob-filtreli kısmi klon** yapar
+  (`git clone --filter=blob:none --sparse --depth 1`) — yalnızca istenen modüller
+  iner.
+- `--repo YOL` mevcut checkout'u **olduğu gibi** mount eder — CLI dalını asla
+  değiştirmez.
+- `--fork KULLANICI` fork'unuzdan klonlar (`origin` = fork, `upstream` = OCA).
+- CLI, compose volume'ünü + `addons_path` girdisini ekler (yedekler ve
+  `docker compose config` doğrulamasıyla) ve `web`'i **yeniden yaratır** (`up -d` —
+  sıradan restart yeni volume mount'unu uygulamaz). Sahiplenilen stack'lerde `--yes`
+  gerekir ve yeniden yaratmayı siz yaparsınız.
+- Başarı sonrası sıradaki adımları yazar: `module test` → whitelist → `module install`.
 
 #### Listele / ara
 
@@ -346,56 +296,41 @@ odoo-installer module list [--instance AD] [--db DB] [--json]
 odoo-installer module search <sorgu> [--limit N]
 ```
 
-`list`, dosya sistemi keşfini `ir_module_module` durumuyla birleştirir: her modül için
-kaynak depo, kayıtlı commit ve — `--db` verildiyse — o veritabanındaki kurulum durumu,
-artı beyaz listeden Tested sütununu gösterir. `search`, OCA GitHub organizasyonunda
-arama yapar.
-
 #### Kur / yükselt
 
 ```bash
-odoo-installer module install <ad...> --db DB [--instance AD] [--allow-untested] [--resolve-deps]
-odoo-installer module upgrade <ad...> --db DB [--instance AD] [--allow-untested] [--resolve-deps]
+odoo-installer module install <ad...> --db DB [--instance AD]
+                            [--allow-untested] [--resolve-deps]
+odoo-installer module upgrade <ad...> --db DB [--instance AD]
+                            [--allow-untested] [--resolve-deps]
 ```
 
-- `web` konteynerinin içinde çalışır:
-  `odoo -d <db> -i/-u <ad> --stop-after-init --http-port=8071` (alternatif port, 8069'daki
-  sunucu sürecini asla rahatsız etmez).
-- `--db` **zorunludur** — varsayılan veritabanı yoktur. Denemeler için scratch adlarını
-  (`oitest_*`) kullanın.
-- tested.toml kaydı olmayan modülleri `--allow-untested` vermediğiniz sürece reddeder.
-- **Bağımlılıklar dry-run'da görünür:** `--modules m1,m2` verildiğinde plan, her
-  modülün bağımlılıklarını (GitHub raw manifest'lerinden okunur, klon gerekmez)
-  doğrular ve sınıflandırır: core (çalışan konteynerden doğrulanır), aynı-repo
-  kardeşler (otomatik olarak sparse klona dahil edilir), diğer-repo
-  (`install --resolve-deps` tarafından mount edilir, sağlayıcı planda yazar) ve
-  zaten-mevcut. Aynı-repo kardeşler her zaman sparse klona katılır; sonraki kurulum
-  "module not found" ile düşemez.
-- **Bağımlılık çözümleme:** OCA modülleri sıkça başka OCA modüllerine bağımlıdır. CLI
-  her hedef modülün `__manifest__.py` bağımlılıklarını okur; Odoo core'unun sağladığı
-  (web konteynerinin core addons dizini listelenerek doğrulanır) veya zaten mount
-  edilmiş repoların sağladığı bağımlılıklar sorunsuz geçer. Sağlayıcı reposu **mount
-  edilmemiş** bir bağımlılık, net bir mesajla reddedilir — `--resolve-deps` verildiğinde
-  sağlayıcı repolar otomatik mount edilir (merkezi whitelist kataloğu her onaylı
-  modülün reposunu + bağımlılıklarını kaydeder) ve bağımlılıklar kurulum listesine eklenir.
-- Sonrasında `ir_module_module` durumlarını doğrular; `installed` durumunda olmayan
-  modül varsa 1 koduyla çıkar.
+Web konteynerinde
+`odoo -d <db> -i/-u <ad> --stop-after-init --http-port=8071` çalıştırır (sunucu
+sürecini asla rahatsız etmez). Whitelist'te olmayan modülleri `--allow-untested`
+olmadan reddeder; sonrasında `ir_module_module` durumlarını doğrular (bir modül
+`installed` değilse 1 koduyla çıkar).
 
-```console
-$ odoo-installer module install web_responsive --db oitest_deneme
-✔ kuruldu: web_responsive
-```
+**Bağımlılık çözümleme** — OCA modülleri sıkça başka OCA modüllerine bağımlıdır. CLI
+her hedefin `__manifest__.py`'sini okur:
+
+- **Odoo core**'un (web konteynerinin core addons listesiyle doğrulanır) veya
+  **mount'lu repoların** sağladığı bağımlılıklar sorunsuz geçer;
+- sağlayıcı reposu **mount edilmemiş** bir bağımlılık, sağlayıcı adıyla reddedilir —
+  `--resolve-deps` ekleyin; sağlayıcı repolar otomatik mount edilir (whitelist
+  kataloğundan) ve bağımlılıklar kurulum listesine eklenir;
+- bilinmeyen sağlayıcılar dürüstçe raporlanır, `module search` ipucu verilir.
 
 #### Kaldırma
 
 ```bash
 odoo-installer module remove <repo> [--db DB] [--purge-repo] [--instance AD]
-                           [--yes] [--apply]
+                             [--yes] [--apply]
 ```
 
-Depoyu unmount eder ve `addons_path`'i (yedeklerle) yeniden yazar. `--db` verildiyse
-önce o veritabanında deponun modülleri `uninstalled` durumuna sıfırlanır. `--purge-repo`
-klon dizinini de siler. Sahiplenilen stack'ler `--apply` ile birlikte `--yes` ister.
+Unmount eder, `addons_path`'i yeniden yazar; `--db` verildiyse deponun modülleri o
+veritabanında `uninstalled` yapılır; `--purge-repo` klonu siler (yalnızca CLI'ın
+sahip olduğu klonlar).
 
 #### Tek modül testi
 
@@ -403,22 +338,9 @@ klon dizinini de siler. Sahiplenilen stack'ler `--apply` ile birlikte `--yes` is
 odoo-installer module test <ad> [--instance AD] [--keep-db]
 ```
 
-Beyaz liste akışının kalbi:
-
-1. varsa eski `oitest_<ad>` scratch veritabanını temizler,
-2. modülü oraya kurar,
-3. web konteynerinde `odoo --test-enable --test-tags=/<ad>` çalıştırır,
-4. tam logu `logs/test-<ad>-<ts>.log` dosyasına yakalar,
-5. logu hata türlerine ayrıştırır (test hatası, import hatası, "not installable",
-   eksik manifest, addons_path uyarısı, yalın çıkış kodu),
-6. PASS/FAIL basar, başarısızlıkta 3 koduyla çıkar,
-7. PASS'te modülü `tested.toml`'a kaydeder (repo, dal, commit, log yolu).
-
-```console
-$ odoo-installer module test web_responsive
-PASS web_responsive (3.2s) — log: .../logs/test-web_responsive-20260901.log
-✔ web_responsive test edildi/kurulabilir olarak kaydedildi (beyaz liste: .../tested.toml)
-```
+Scratch DB'ye kurar, `--test-enable --test-tags=/<ad>` çalıştırır, logu yakalar,
+hata türlerini ayrıştırır, PASS/FAIL basar (başarısızlıkta 3 koduyla çıkar) ve
+PASS'leri whitelist'e kaydeder.
 
 #### Zaten kanıtlanmış modülleri onaylama
 
@@ -426,229 +348,176 @@ PASS web_responsive (3.2s) — log: .../logs/test-web_responsive-20260901.log
 odoo-installer module approve <ad...> --db DB [--instance AD]
 ```
 
-Modülleri **testleri yeniden çalıştırmadan** beyaz listeye kaydeder — kanıt, modülün
-açık bir veritabanındaki `installed` durumudur (yazmadan önce doğrulanır; başka durumda
-olanlar reddedilir). Modülün bir stack'te üretimde zaten çalıştığı ve her makinenin onu
-kurulabilir saymasını istediğiniz durumlarda kullanın.
+Kalitesi çalışan bir stack'te kanıtlanmış modüller için: `--db`'de `installed`
+durumunda olmayan her şeyi reddeder, sonra whitelist'e kaydeder — test logu gerekmez.
 
-### 4.7 `test suite` — toplu test
+### 4.7 `test` — toplu test ve merkezi senkron
 
 ```bash
 odoo-installer test suite [--instance AD] [--only REPO] [--modules m1,m2]
                           [--output rapor.md] [--output rapor.json] [--keep-db]
+odoo-installer test pull [--apply]
 ```
 
-Instance'ın addons_path'indeki **tüm modülleri** sırayla test eder (Odoo kısıtı: aynı
-anda tek scratch veritabanı), her modül için taze `oitest_<modül>` scratch DB'si
-kullanır. PASS'ler beyaz listeye işlenir. `--only` tek kaynak depoyla sınırlar (`web`
-veya `OCA/web`); `--modules` açık liste sabitler. `--output` tekrarlanabilir; Markdown
-ve/veya JSON raporu yazar. Herhangi bir modül başarısız olursa **3** koduyla çıkar.
+`suite`, addons_path'teki her modülü sırayla test eder (her birine taze
+`oitest_<modül>` scratch DB), PASS'leri whitelist'e işler, tekrarlanabilir
+`.md`/`.json` rapor yazdır ve bir şey başarısızsa **3** koduyla çıkar. `--only`
+kaynak depoya göre süzer.
 
-#### Merkezi whitelist reposu (`test pull`)
-
-`tested_repo_url`'ı kökünde `tested.toml` tutan küçük bir git reposuna yönlendirin, sonra:
-
-```bash
-odoo-installer config set tested_repo_url https://github.com/<org>/odoo-installer-tested.git
-odoo-installer test pull --apply
-```
-
-Pull, yerel önbellek klonunu tazeler ve repodaki girdileri etkin whitelist'e
-**birleştirir**: modül adına göre birleşim, çakışmada daha yeni `tested_at` kazanır.
-Herhangi bir makinede yapılan onaylar (test PASS'i veya `module approve`) pull çeken
-her makineye yayılır — yeni onaylar için CLI'ı güncellemek gerekmez, yalnızca repo'yu
-güncellemek yeterlidir.
-
-```console
-$ odoo-installer test suite --only web --output rapor.md --output rapor.json
-[1/12] web_responsive (web)
-PASS web_responsive (3.1s)
-...
-12 modül: 11 geçti, 1 başarısız   → çıkış 3
-✔ rapor yazıldı: rapor.md
-✔ rapor yazıldı: rapor.json
-```
+`pull`, `tested_repo_url` ile yapılandırılan merkezi repodan whitelist'i senkronlar:
+yerel önbellek klonunu tazeler ve repodaki `tested.toml`'u etkin whitelist'e
+**birleştirir** — modül adına göre birleşim, daha yeni `tested_at` kazanır. Herhangi
+bir yerde yapılan onaylar pull çeken her makineye yayılır; yeni onaylar için CLI'ı
+güncellemek gerekmez.
 
 ---
 
-## 5. Yapılandırma dosyaları ve durum
+## 5. Dosyalar ve yapılandırma
 
-Tüm dosyalar XDG yapılandırma dizininde (`~/.config/odoo-installer/`) tutulur; tüm
-yazımlar atomiktir (geçici dosya + rename).
+Tüm dosyalar platformdirs konumlarında tutulur; her yazım atomiktir.
 
 | Dosya | Amaç |
 |-------|------|
-| `config.toml` | genel kullanıcı yapılandırması (tablo §4.3'te) |
-| `registry.toml` | instance kaydı: `ad → {dir, http_port, created_at, adopted}` |
-| `tested.toml` | kurulabilir-modüller beyaz listesi: `modül → {repo, branch, commit, db, log_path}` |
-| `<stack>/.odoo-installer.json` | instance manifest'i: şema sürümü, odoo sürümü, imaj, pg tag, eklenen depolar `{repo, url, branch, commit, modules, mount}`, adopted bayrağı |
-| `<stack>/repos/<repo>/` | OCA klonları — dal/commit için doğruluk kaynağı git durumudur |
+| `~/.config/odoo-installer/config.toml` | genel yapılandırma (§4.3) |
+| `~/.config/odoo-installer/registry.toml` | instance kayıt defteri |
+| `~/.config/odoo-installer/tested.toml` | kurulabilir-modüller whitelist'i |
+| `<stack>/.odoo-installer.json` | instance manifest'i |
+| `<stack>/repos/<repo>/` | OCA klonları — dal/commit için doğruluk kaynağı git'tir |
+| `<stack>/logs/` · `~/.local/state/odoo-installer/logs/<ad>/` | test logları (oluşturulan / sahiplenilen stack'ler) |
 
-Yapılandırma önceliği: **CLI bayrakları > instance manifest'i > genel config.toml >
-sabitler.**
+Öncelik: **CLI bayrakları > instance manifest'i > genel config.toml > sabitler.**
 
-GitHub erişimi: CLI, token'ı `github_token_env` anahtarının adlandırdığı ortam
-değişkeninden (varsayılan `GITHUB_TOKEN`) okur; token yoksa çevrimdışı keşfe zarifçe
-düşer.
+GitHub token'ları: `github_token_env`'in adlandırdığı ortam değişkeninden okunur
+(varsayılan `GITHUB_TOKEN`); olmadığında keşif zarifçe düşer.
 
 ---
 
-## 6. Yaygın iş akışları
+## 6. Tarifler
 
-### 6.1 Yeni bir makineyi hazırlama
+### 6.1 Bir makineyi hazırlama
 
 ```bash
-odoo-installer doctor                # host'u doğrula (4 kodu = önce düzelt)
-odoo-installer install               # dry-run: neler kurulacak?
-odoo-installer install --apply       # docker engine, compose eklentisi, git
-odoo-installer doctor                # artık hepsi yeşil olmalı
+odoo-installer doctor && odoo-installer install --apply && odoo-installer doctor
 ```
 
-### 6.2 Sıfırdan dev instance + OCA modülü, adım adım
+### 6.2 Taze dev instance + OCA modülü
 
 ```bash
 odoo-installer instance create dev --apply
 odoo-installer db create odoo --instance dev
-
-odoo-installer module search "responsive"
 odoo-installer module add web --sparse --modules web_responsive --apply
-odoo-installer module test web_responsive      # scratch DB, PASS → beyaz liste
+odoo-installer module test web_responsive
 odoo-installer module install web_responsive --db odoo
 ```
 
-Her adım ayrıştırılabilir ve idempotenttir — bir şey ters giderse düzeltip yalnızca o
-adımı yeniden çalıştırırsınız.
-
-### 6.3 Bir OCA deposundaki fork'unuzla çalışma
+### 6.3 Fork'unuzdan çalışma
 
 ```bash
 odoo-installer module add server-tools --fork myuser --apply
-# origin = https://github.com/myuser/server-tools.git, upstream = OCA
 ```
 
-### 6.4 Mevcut yerel checkout'unuzu kullanma (worktree deseni)
+### 6.4 Kendi checkout'unuzu mount etme (asla değiştirilmez)
 
 ```bash
 odoo-installer module add web --repo ~/dev/web-deploy --apply
-# checkout'u olduğu gibi mount eder; CLI dalını asla değiştirmez
 ```
 
-### 6.5 Bir stack için tam kurulabilirlik raporu
+### 6.5 Tam kurulabilirlik raporu
 
 ```bash
 odoo-installer test suite --output rapor.md --output rapor.json
-# herhangi bir modül başarısız olursa çıkış 3; PASS'ler beyaz listeye işlenir
 ```
 
-### 6.6 Üretim stack'ini sahiplenme ve güvenle inceleme
+### 6.6 Üretimi sahiplenme, güvenle inceleme
 
 ```bash
 odoo-installer instance adopt ~/Projects/my-odoo --apply
-odoo-installer db list --instance my-odoo         # psql -l ile eşleşmeli
-odoo-installer module list --instance my-odoo --db odoo
-odoo-installer module test web_responsive         # yalnızca scratch DB, asla odoo DB değil
+odoo-installer db list --instance my-odoo
+odoo-installer module approve attribute_set pim --db odoo   # kanıtlanmışlar → whitelist
 ```
 
-Yalnızca okuma komutları + scratch-DB testleri — sahiplenilen stack'in dosyalarına ve
-üretim `odoo` veritabanına açık, korumalı eylemler olmadan asla dokunulmaz.
-
-### 6.7 Modülleri güvenle yükseltme
+### 6.7 Onayları makineler arasında paylaşma
 
 ```bash
-odoo-installer module test my_module --keep-db          # önce scratch DB'de doğrula
-odoo-installer module upgrade my_module --db odoo       # yalnızca beyaz listeden geçtiyse
+# 1) kanıtlı stack'te: onayları kaydet
+oii module approve attribute_set pim product_attribute_set --db odoo
+# 2) whitelist'i merkezi repoya push et (kökünde tested.toml)
+# 3) her yerde:
+oii config set tested_repo_url https://github.com/<org>/odoo-installer-tested.git
+oii test pull --apply
+```
+
+### 6.8 Güvenle yükseltme
+
+```bash
+oii module test my_module --keep-db          # scratch DB'de kanıtla
+oii module upgrade my_module --db odoo       # yalnızca whitelist'tekiler geçer
 ```
 
 ---
 
-## 7. Güvenlik kuralları ve çıkış kodları
+## 7. Güvenlik ve çıkış kodları
 
-- **Plan-önce:** `install`, `instance create/remove`, `module add/remove`,
-  `db drop/reset` numaralı plan yazdırır; uygulama için `--apply` (yıkıcı onaylar için
-  ayrıca `--yes`) gerekir.
-- **Idempotency:** her adım önce mevcut durumu kontrol eder (paket kurulu mu? depo
-  doğru commit'te mi? addons_path girdisi zaten var mı?) ve işi tekrarlamak yerine
-  `already satisfied` raporlar.
-- **Açık veritabanı adları:** CLI asla kendiliğinden bir veritabanı adı uydurmaz.
-- **Sahiplenilen stack'ler:** `--yes` olmadan asla yeniden yazılmaz, CLI tarafından
-  asla yeniden yaratılmaz (tek istisna: açık `instance remove --apply --yes`).
-- **Scratch DB'ler:** `oitest_*` adları, `--keep-db` verilmedikçe kullanımdan sonra
-  silinir.
-
-Çıkış kodları:
+- Her mutasyonda plan-önce; uygulanırken canlı `[i/n]` ilerleme.
+- Idempotent tekrarlar işi yeniden yapmak yerine `already satisfied` raporlar.
+- Veritabanı adları her zaman açık.
+- Sahiplenilen stack'ler: `--yes` olmadan asla yeniden yazılmaz, CLI tarafından asla
+  yeniden yaratılmaz.
+- Scratch DB'ler (`oitest_*`) `--keep-db` olmadıkça silinir.
 
 | Kod | Anlamı |
 |-----|--------|
 | 0 | başarı |
-| 1 | çalışma zamanı hatası (ör. modül kurulamadı, plan adımı başarısız) |
-| 2 | kullanım hatası (Typer varsayılanı) |
+| 1 | çalışma zamanı hatası |
+| 2 | kullanım hatası (Typer) |
 | 3 | test başarısızlıkları (`module test`, `test suite`) |
-| 4 | `doctor` kritik bir kontrol başarısızlığı buldu |
-
-Script'ler bu kodlara güvenebilir; ör. `odoo-installer doctor || exit 1` benzeri
-kapılar veya 3 kodunu "modülü düzelt" olarak yorumlamak.
+| 4 | `doctor` kritik kontrol başarısızlığı |
 
 ---
 
 ## 8. Sorun giderme
 
-**`doctor` 4 koduyla çıkıyor.**
-FAIL satırını okuyun — kontrolün adını ve düzeltme ipucunu verir. Yaygın nedenler:
-compose eklentisi eksik, kullanıcı `docker` grubunda değil, port aralığı dolu.
+**`doctor` 4 koduyla çıkıyor.** FAIL satırını okuyun — kontrol adı ve düzeltme ipucu
+verir. Yaygın nedenler: compose eklentisi eksik, kullanıcı `docker` grubunda değil,
+port aralığı dolu.
 
-**"module ... not visible to this instance; run 'module add' first".**
-Modül instance'ın addons_path'inde değil. Repoyu `module add` ile ekleyin (veya
-checkout'unuzu `--repo` ile mount edin).
+**"modules not visible to this instance; run 'module add' first".** Modül
+addons_path'te değil — reposunu `module add` ile ekleyin (veya `--repo` ile
+checkout'unuzu mount edin).
 
-**"not tested yet: ... — run 'module test <name>' first".**
-tested.toml beyaz listesinde modülün kaydı yok. `module test <ad>` (veya `test suite`)
-çalıştırın; bilinçli olarak `--allow-untested` ile atlayabilirsiniz.
+**"not tested yet: ...".** Whitelist'te kayıt yok — `module test <ad>` çalıştırın veya
+bilinçli olarak `--allow-untested` verin.
 
-**"repo ... has no 19.0 branch".**
-OCA deposunda 19.0 dalı yok. Ya dalın gelmesini bekleyin ya da kendi hazırladığınız
-checkout'u `--repo` ile gösterin.
+**"branch '19.0' does not exist on OCA/<ad>"** — ipucuyla birlikte. Modül adı verip
+repo beklenen bir durumda ipucu, sağlayıcı repoyu ve tam komutu söyler. Değilse
+yazımı kontrol edin veya `module search <ad>` çalıştırın.
 
-**GitHub rate limit / boş arama sonuçları.**
-Token tanımlayın: `export GITHUB_TOKEN=ghp_...` (veya `github_token_env`
-yapılandırmanızdaki ortam değişkeni adı) ve tekrar deneyin. Token olmadan çevrimdışı
-keşif yine de çalışır.
+**"missing OCA dependencies need mounting: ...".** Bağımlılık çözücüsü mount
+edilmemiş sağlayıcı repolar buldu. `--resolve-deps` ile tekrar çalıştırın (onaylar
+merkezi repodaysa önce `test pull`).
 
-**Port dolu.**
-`instance create` 8069–8099 aralığındaki ilk boş portu seçer — ama *durdurulmuş* bir
-stack portunu rezerve etmez, bu yüzden iki instance aynı porta kaydolabilir. Onları
-sırayla başlatın, `--http-port` ile sabitleyin veya `config set port_range_end ...`
-ile aralığı genişletin.
+**GitHub rate limit / boş arama sonuçları.** Token tanımlayın (`GITHUB_TOKEN` veya
+`github_token_env`'in adlandırdığı değişken).
 
-**Sahiplenilen stack "recreate it with your own tooling" diyor.**
-Sahiplenilen stack'te `module add --yes` sonrası CLI dosyaları günceller ama
-konteynerleri asla yeniden yaratmaz — yeni mount'ın uygulanması için web servisini
-kendiniz yeniden yaratın (`docker compose up -d web`; sıradan bir restart yeni
-volume mount'unu uygulamaz).
+**Port dolu.** Durdurulmuş bir stack portunu rezerve etmez — iki instance aynı portu
+paylaşabilir. Sırayla başlatın, `--http-port` ile sabitleyin veya aralığı genişletin.
 
-**Modül kuruldu ama Odoo onu kurulu değil gösteriyor.**
-`module install`, `ir_module_module` durumlarını doğrular ve hatalıları listeleyerek 1
-koduyla çıkar — yakalanan çıktının son satırlarına (soluk yazdırılır) ve modülün
-bağımlılıklarına bakın.
+**"recreate it with your own tooling".** Sahiplenilen stack'te `module add --yes`
+sonrası web servisini kendiniz yeniden yaratın (`docker compose up -d web`) — sıradan
+restart yeni volume mount'unu uygulamaz.
 
-**Veritabanı yöneticisi master password soruyor — şifre nerede?**
-Hiçbir şey bu alanı sizin yerinize doldurmaz: resmi `odoo` imajı master password'ü
-**hiçbir ortam değişkeniyle** sağlamaz (entrypoint'i yalnızca DB bağlantı
-değişkenlerini ayarlar, imajın varsayılan config'inde `admin_passwd` yorum satırıdır)
-ve Odoo formu sunucu tarafında asla ön-doldurmaz. Dolu görünen alan, tarayıcınızın
-kaydettiği şifrenin autofill'idir. `instance create` rastgele bir master password
-üretir ve `<stack>/.env` (`ADMIN_PASSWD=...`) ile `<stack>/config/odoo.conf`
-(`admin_passwd = ...`) dosyalarına yazar. CLI ile okuyun:
-`odoo-installer instance secret <ad>` (DB şifresi için `--key POSTGRES_PASSWORD`).
-Kendi şifrenizi belirlemek için `config/odoo.conf` içindeki `admin_passwd`'i
-(tutarlılık için `.env`'i de) düzenleyip `odoo-installer instance restart <ad>`
-çalıştırın.
+**Modül kuruldu ama Odoo kurulu değil diyor.** `module install` `ir_module_module`
+durumlarını doğrular ve hatalıları listeleyerek 1 koduyla çıkar — soluk yazılan çıktı
+kuyruğuna ve modülün bağımlılıklarına bakın.
 
-**İki instance aynı portu (8069) istiyor.**
-Otomatik port atama, *o an* boş olan ilk portu seçer — durdurulmuş bir stack portunu
-rezerve etmez. İki kayıtlı instance aynı portu paylaşıyorsa onları sırayla başlatın ya
-da birini başka portta yeniden oluşturun (ör. `instance create <ad> --http-port 8070`).
+**Veritabanı yöneticisi master password soruyor.** O alanı hiçbir şey doldurmaz:
+resmi `odoo` imajı master password'ü hiçbir env ile sağlamaz, varsayılan config'de
+`admin_passwd` yorum satırıdır. Kendi şifrenizi
+`odoo-installer instance secret <ad>` ile okuyun; değiştirmek için `config/odoo.conf`
+içindeki `admin_passwd`'i (ve `.env`'i) düzenleyip `instance restart` verin.
 
-**Test logları nerede?**
-Oluşturulan instance'lar: `<stack>/logs/test-<modül>-<ts>.log`. Sahiplenilen
-instance'lar: `~/.local/state/odoo-installer/logs/<ad>/` (XDG state dizini — CLI
-sahiplenilen stack'lere asla yazmaz).
+**İki instance aynı portu istiyor.** "Port dolu"ya bakın — durdurulmuş stack portu
+rezerve etmez.
+
+**Test logları nerede?** Oluşturulan instance'lar: `<stack>/logs/`. Sahiplenilenler:
+`~/.local/state/odoo-installer/logs/<ad>/`.

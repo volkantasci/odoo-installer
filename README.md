@@ -1,40 +1,58 @@
 # odoo-installer
 
-Professional CLI to install, configure and manage **Odoo 19.0** Docker stacks, with
-correct-branch OCA module management and automated installability testing of OCA modules.
+[![CI](https://github.com/volkantasci/odoo-installer/actions/workflows/ci.yml/badge.svg)](https://github.com/volkantasci/odoo-installer/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/odoo-installer)](https://pypi.org/project/odoo-installer/)
+[![Python](https://img.shields.io/pypi/pyversions/odoo-installer)](https://pypi.org/project/odoo-installer/)
+[![License](https://img.shields.io/pypi/l/odoo-installer)](LICENSE)
 
-- **Docker-only runtime** — never installs Odoo on the host; every instance is a compose stack.
-- **Plan-first safety** — destructive actions print a plan and run as dry-run until you pass `--apply`.
-- **Correct OCA branches** — the 19.0 branch is verified via the GitHub API before any clone.
-- **Tested-only installs** — `module install` refuses modules that have not passed a real
-  test run; passing runs are recorded in an installable-addons whitelist (`tested.toml`).
-- **Idempotent** — every action can be re-run safely (ports pin, secrets persist, re-runs no-op).
+**One CLI for your Odoo 19.0 fleet.** Create and manage Docker stacks, install OCA
+modules at the correct branch, prove they work before they ship, and share approvals
+across machines — with plan-first safety everywhere.
 
-The development plan, architecture, decisions, and milestones live in
+- 🐳 **Docker-only runtime** — every instance is a compose stack; Odoo is never
+  installed natively.
+- 📋 **Plan-first safety** — every mutation prints its exact plan (live `[i/n]`
+  progress) and runs only with `--apply` — plus `--yes` when destructive.
+- 🌿 **Correct OCA branches** — `origin/19.0` is verified via the GitHub API before
+  any clone; never guessed.
+- ✅ **Tested-only installs** — `module install` refuses modules that have not passed
+  a real test run (or been approved on a proven stack).
+- 🔗 **Dependency resolver** — reads each module's `__manifest__.py`, verifies core
+  deps against the running container and mounts the OCA repos that provide the rest
+  (`--resolve-deps`).
+- 🗂️ **Central approvals** — the whitelist lives in a git repo: `module approve`
+  records proven modules, `test pull` spreads them to every machine. No CLI update
+  needed for new approvals.
+- 🔁 **Idempotent** — re-runs are safe: ports pin, secrets persist, satisfied steps
+  report `already satisfied`.
+
+The development plan, architecture, decisions and milestones live in
 [DEVELOPMENT.md](DEVELOPMENT.md).
 
-Detailed usage guide: [USAGE.md](USAGE.md) (English) · [USAGE.tr.md](USAGE.tr.md)
-(Türkçe).
+Detailed usage guide: **[USAGE.md](USAGE.md)** (English) ·
+**[USAGE.tr.md](USAGE.tr.md)** (Türkçe).
 
 ## Installation
 
 ```bash
-pip install odoo-installer            # from PyPI (0.6.0+)
+pip install odoo-installer            # from PyPI
 # or from a checkout:
 pip install .
 ```
 
-Requires Python ≥ 3.11, a working `docker` engine with the `compose` plugin, and `git`.
-Run `odoo-installer doctor` to verify the host. Shell completion:
-`odoo-installer --install-completion` (bash/zsh/fish).
+Requires Python ≥ 3.11, a working `docker` engine with the `compose` plugin, and
+`git`. Isolated daily-use install: `pipx install odoo-installer`. Shell completion:
+`odoo-installer --install-completion`.
+
+Run `odoo-installer doctor` to verify the host.
 
 ## Quick start
 
 ```bash
 odoo-installer doctor                      # host checks; exit 4 on critical failure
-odoo-installer install --apply             # install missing host prerequisites (pacman/apt)
+odoo-installer install --apply             # install missing host prerequisites
 
-odoo-installer instance create dev --apply # new stack: compose + .env + odoo.conf, port 8069-8099
+odoo-installer instance create dev --apply # new stack: compose + .env + odoo.conf
 odoo-installer db create odoo --instance dev
 
 odoo-installer module search "responsive"  # find OCA repos on GitHub
@@ -43,38 +61,28 @@ odoo-installer module test web_responsive  # scratch-DB test run; PASS -> whitel
 odoo-installer module install web_responsive --db odoo
 
 odoo-installer test suite --output report.md --output report.json
-odoo-installer instance adopt ~/Projects/my-odoo --apply      # manage an existing stack
+odoo-installer instance adopt ~/Projects/my-odoo --apply  # manage an existing stack
 ```
 
-The whitelist is the contract: only modules that pass `module test` (or the `test suite`)
-appear as installable; everything else requires an explicit `--allow-untested`.
+## Commands at a glance
 
-## Command line
+| Command | Purpose |
+|---------|---------|
+| `doctor [--json]` | host diagnostics (exit 4 on critical failure) |
+| `install [--apply]` | host prerequisites — plan-first |
+| `config show\|set\|edit\|path` | global configuration |
+| `instance create\|adopt\|list\|show\|secret\|start\|stop\|restart\|remove` | stack lifecycle |
+| `db list\|create\|drop\|reset` | databases (drop/reset: `--apply --yes`) |
+| `module add\|list\|search\|install\|upgrade\|remove\|test\|approve` | OCA repos and modules |
+| `test suite\|pull` | batch testing with reports · central whitelist sync |
+| `version` | print the version |
 
-```bash
-odoo-installer --version                  # also: oii --version, python -m odoo_installer --version
-odoo-installer doctor [--json]            # host prerequisite checks; exit 4 on critical failure
-odoo-installer config show|set|edit       # global configuration (config.toml)
-odoo-installer install [--apply]          # host prerequisites (docker, compose, git); plan-first
-odoo-installer instance create <name> [--apply]   # new Odoo stack (dry-run by default)
-odoo-installer instance adopt <dir> [--apply]     # manage an existing compose stack (read-mostly)
-odoo-installer instance list|show|secret|start|stop|restart|remove
-odoo-installer db list|create|drop|reset          # drop/reset need --apply --yes
-odoo-installer module add <oca-repo> [--modules m1,m2] [--sparse] [--repo PATH] [--apply]
-odoo-installer module list [--instance NAME] [--json] | search <query>
-odoo-installer module test <module>          # scratch-db test run; PASS -> whitelist
-odoo-installer module approve <module...> --db DB  # whitelist verified installed modules
-odoo-installer module install|upgrade <module...> --db DB   # refuses untested modules
-odoo-installer module remove <repo> [--purge-repo] [--apply]
-odoo-installer test suite [--only <repo>] [--modules m1,m2]
-                          [--output report.{md,json}] [--keep-db]
-odoo-installer test pull [--apply]          # merge central whitelist repo (tested_repo_url)
-```
+The full, precise command surface is specified in [DEVELOPMENT.md](DEVELOPMENT.md) §2;
+the detailed usage guide (options, examples, recipes, troubleshooting) is
+[USAGE.md](USAGE.md).
 
-The full, precise command surface is specified in [DEVELOPMENT.md](DEVELOPMENT.md) §2.
-
-Exit codes: `0` success · `1` error · `3` test failures (`module test`, `test suite`) ·
-`4` critical host check failed (`doctor`).
+Exit codes: `0` success · `1` error · `2` usage error · `3` test failures ·
+`4` critical host check failed.
 
 ## Development
 

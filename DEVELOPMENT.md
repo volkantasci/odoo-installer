@@ -24,6 +24,8 @@ Locked in with the project owner before implementation:
 | D6 | Config | **TOML**: global `~/.config/odoo-installer/config.toml`, per-instance manifest `<stack>/.odoo-installer.json`, global registry `~/.config/odoo-installer/registry.toml`. |
 | D7 | Safety | System-changing and destructive commands are **plan-first**: without `--apply` / `--yes` they print exactly what they would do and exit 0. Idempotent re-runs are a requirement. |
 | D8 | Git access | Plain `git` via `subprocess` (no GitPython). GitHub metadata via **httpx**. |
+| D9 | Whitelist distribution | The installable-addons whitelist (`tested.toml`) can be mirrored in a dedicated git repo (`tested_repo_url` config key); `test pull` merges it into the local whitelist — union by module name, newer `tested_at` wins. New approvals spread to every machine without CLI updates. |
+| D10 | Dependency resolution | Manifest-driven: `depends` is read from `__manifest__.py` (GitHub raw at plan-build time, disk at apply time). Core deps are verified by listing the web container's core addons dir — never guessed. Same-repo siblings join the sparse clone; missing provider repos mount only with explicit `--resolve-deps`, resolved via the whitelist catalog. |
 
 ### Non-goals for v1
 
@@ -172,6 +174,7 @@ src/odoo_installer/
 │   ├── modules.py         # OCA repo resolution, cloning, module discovery
 │   ├── runner.py          # odoo command execution inside the web container
 │   ├── tester.py          # scratch-DB test runs, log parsing, report building
+│   ├── tested.py          # central whitelist repo: pull plan + registry merge
 │   ├── plan.py            # Step model + apply_steps executor (dry-run/--apply)
 │   └── dbms.py            # database list/create/drop/reset via psql
 ├── adapters/
@@ -314,6 +317,14 @@ The tool must behave exactly like the documented OCA workflow:
    --yes`, which tears the stack down (with `--remove-data`, its named volumes too) and
    deletes the stack directory — an explicit, confirmed destructive action, never a
    silent rewrite.
+8. **Dependency resolution is manifest-driven and catalog-assisted.** A module's
+   `depends` is read from its `__manifest__.py` (GitHub raw at plan-build time, from
+   disk at apply time) and every dependency is classified: **Odoo core** (verified by
+   listing the web container's core addons dir — never guessed), **same-repo sibling**
+   (joins the sparse clone so the install cannot fail with "module not found"),
+   **other-repo** (provider resolved from the whitelist catalog and shown in the plan;
+   mounted only by `module install --resolve-deps`), **already available** (mounted or
+   local). Unknown providers are reported honestly — never guessed.
 
 ---
 
@@ -457,15 +468,19 @@ smoke instead; the throwaway-stack integration test layer is deferred to v1.1 (s
 
 ### v1.1 roadmap (priority order)
 
+Shipped since v0.1.0 (tracked in [CHANGELOG.md](CHANGELOG.md)): adopted-instance
+removal with volume support, `instance secret`, central whitelist repo (`test pull` +
+`module approve` + `tested_repo_url`), OCA dependency resolver (`--resolve-deps`),
+blob-filtered sparse clones, live `[i/n]` plan progress, two-language usage guides,
+PyPI releases (0.1.1 → 0.6.0).
+
 1. **Integration test layer** (`tests/integration/`, marker `integration`) and the CI
    docker job — the biggest open gap: automated end-to-end
    `instance create → module add → module install → test module` on a throwaway stack,
    run locally and in CI.
 2. `module upgrade-repos` — re-sync OCA clones to their recorded 19.0 branches.
 3. apt adapter validation on a real Debian/Ubuntu machine (D3's "later milestone").
-4. Publish to PyPI — ✔ done (0.1.1, 2026-09-01); README switched back to
-   `pip install odoo-installer`.
-5. Backlog from §1 non-goals: DB backup/restore, SMTP setup wizard, reverse-proxy/TLS
+4. Backlog from §1 non-goals: DB backup/restore, SMTP setup wizard, reverse-proxy/TLS
    generation.
 
 ---
