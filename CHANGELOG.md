@@ -21,6 +21,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   any machine (test PASSes or `module approve`) spread to every machine that pulls;
   the CLI itself does not need updating for new approvals, only the repo does.
 
+## [0.5.2] - 2026-09-01
+
+### Changed
+
+- `module add --sparse` now performs a **blob-filtered partial clone**
+  (`git clone --filter=blob:none --sparse --depth 1`) instead of a full shallow clone
+  followed by a sparse-checkout trim: only the requested modules' blobs download, so
+  huge repos (OCA/web, OCA/l10n-turkey, ...) cost megabytes, not the whole snapshot.
+- The plan itself is now honest about the sparse scope: the first step reads
+  `sparse-clone <url> ... (blob-filtered, only: <modules>)` instead of a bare
+  `place <url> ...` that looked like a full-repo add.
+- Re-running `module add --sparse` on an existing clone narrows the sparse set before
+  checking out, keeping blob fetches minimal.
+
 ## [0.5.1] - 2026-09-01
 
 ### Fixed

@@ -285,7 +285,7 @@ def test_module_add_plan_missing_branch_fails_before_clone(tmp_path: Path) -> No
 
 
 def test_module_add_plan_sparse_requests_modules(tmp_path: Path) -> None:
-    fs, git = FakeFs(), FakeGit(sample_modules=("server_util_foo",))
+    git = FakeGit()
     plan = module_add_plan(
         config=make_config(tmp_path),
         manifest=make_manifest(tmp_path),
@@ -296,11 +296,21 @@ def test_module_add_plan_sparse_requests_modules(tmp_path: Path) -> None:
         existing_repo=None,
         github=FakeGitHub(),
         git=git,
-        fs=fs,
+        fs=FakeFs(),
         docker=FakeDocker(),
     )
     apply_steps(plan.steps)
-    assert git.sparse == [["server_util_foo"]]
+    assert git.sparse_cloned == [
+        (
+            "https://github.com/OCA/server-utils.git",
+            make_config(tmp_path).instances_root / "dev" / "repos" / "oca-server-utils",
+            ["server_util_foo"],
+        )
+    ]
+    assert git.sparse == []  # fresh sparse clone sets the cone at clone time
+    # the plan itself is honest about the sparse scope
+    assert "sparse-clone" in plan.steps[0].description
+    assert "only: server_util_foo" in plan.steps[0].description
 
 
 def test_module_add_plan_adopted_has_no_restart_step(tmp_path: Path) -> None:

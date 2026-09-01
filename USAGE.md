@@ -314,8 +314,10 @@ odoo-installer module add <oca-repo> [--modules m1,m2] [--sparse] [--repo PATH]
 - Clones are shallow, single-branch (`--depth 1 --branch 19.0`).
 - `--modules m1,m2`: record only these modules (the whole repo is still mounted unless
   `--sparse` is used).
-- `--sparse`: git sparse-checkout limited to the requested modules — keeps big repos
-  (e.g. OCA/web) small.
+- `--sparse`: **blob-filtered partial clone** (`git clone --filter=blob:none
+  --sparse`) — only the requested modules are downloaded, so a huge repo like OCA/web
+  costs a couple of megabytes instead of the full snapshot. The plan announces the
+  sparse scope explicitly.
 - `--repo PATH`: mount an **existing local checkout** instead of cloning. The CLI never
   switches branches or mutates a checkout it does not own.
 - `--fork USER`: clone from your fork (`origin = your fork`, `upstream = OCA`).

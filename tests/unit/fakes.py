@@ -233,6 +233,7 @@ class FakeGit:
         self._branch = branch
         self._sample_modules = sample_modules
         self.cloned: list[tuple[str, Path]] = []
+        self.sparse_cloned: list[tuple[str, Path, list[str]]] = []
         self.fetched: list[Path] = []
         self.checkouts: list[tuple[Path, str]] = []
         self.sparse: list[list[str]] = []
@@ -246,6 +247,18 @@ class FakeGit:
         self.cloned.append((url, target))
         target.mkdir(parents=True, exist_ok=True)
         for module in self._sample_modules:
+            module_dir = target / module
+            module_dir.mkdir(parents=True, exist_ok=True)
+            (module_dir / "__manifest__.py").write_text("{}", encoding="utf-8")
+        self._existing.add(target)
+        return ""
+
+    def sparse_clone(self, url: str, path: Path, branch: str, dirs: list[str]) -> str:
+        """Materializes ONLY the requested module dirs (mirrors a partial clone)."""
+        target = Path(path)
+        self.sparse_cloned.append((url, target, list(dirs)))
+        target.mkdir(parents=True, exist_ok=True)
+        for module in dirs:
             module_dir = target / module
             module_dir.mkdir(parents=True, exist_ok=True)
             (module_dir / "__manifest__.py").write_text("{}", encoding="utf-8")

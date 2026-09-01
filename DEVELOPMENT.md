@@ -291,8 +291,9 @@ The tool must behave exactly like the documented OCA workflow:
 2. **Remotes.** Clones get `origin = https://github.com/OCA/<repo>.git`. If the user
    supplies `--fork <user>`, `origin` is the fork and `upstream` is OCA (mirrors the
    manual workflow).
-3. **Sparse mode.** `--sparse` uses `git sparse-checkout` limited to the requested modules
-   (plus their manifest dirs) to keep clones small; default is a full clone.
+3. **Sparse mode.** `--sparse` performs a blob-filtered partial clone
+   (`git clone --filter=blob:none --sparse --depth 1`) limited to the requested
+   modules — only their blobs are downloaded; default is a shallow full clone.
 4. **Existing checkouts.** `--repo <path>` mounts an existing local checkout instead of
    cloning — this is how the tool coexists with the `~/dev/<repo>` + `~/dev/<repo>-deploy`
    worktree pattern used on this machine: the CLI mounts whatever path it is told to and

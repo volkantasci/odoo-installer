@@ -475,32 +475,41 @@ def module_add_plan(
     def sync_clone() -> str:
         existed = git.is_repo(host_path)
         before = git.current_commit(host_path) if existed else None
-        if existed:
+        sparse_dirs = modules_opt if (sparse and modules_opt) else None
+        if not existed:
+            if sparse_dirs:
+                # blob-filtered partial clone: only the requested modules download
+                git.sparse_clone(url, host_path, branch, sparse_dirs)
+                note = "sparse clone (blob-filtered)"
+            else:
+                git.clone(url, host_path, branch=branch, depth=1)
+                git.checkout(host_path, f"origin/{branch}")
+                note = "cloned and checked out (shallow)"
+        else:
             actual_url = git.remote_url(host_path)
             if actual_url.rstrip(".git").rstrip("/") != url.rstrip(".git").rstrip("/"):
                 raise StackError(f"{host_path} is a clone of {actual_url}, expected {url}")
             git.fetch(host_path)
+            if sparse_dirs:
+                # narrow the sparse set BEFORE checkout so blob fetches stay minimal
+                git.sparse_checkout_set(host_path, sparse_dirs)
             git.checkout(host_path, f"origin/{branch}")
             note = "fetched and checked out"
-        else:
-            git.clone(url, host_path, branch=branch, depth=1)
-            git.checkout(host_path, f"origin/{branch}")
-            note = "cloned and checked out (shallow)"
-        if sparse and modules_opt:
-            git.sparse_checkout_set(host_path, modules_opt)
-            note += " (sparse)"
+            if sparse_dirs:
+                note += " (sparse updated)"
         after = git.current_commit(host_path)
         if before != after:
             state["changed"] = True
         return f"{note} at {after[:8]}"
 
     if existing_repo is None:
-        steps.append(
-            Step(
-                description=f"place {url} at branch {branch} in {host_path}",
-                run=sync_clone,
+        step_desc = f"place {url} at branch {branch} in {host_path}"
+        if sparse and modules_opt:
+            step_desc = (
+                f"sparse-clone {url} at branch {branch} into {host_path} "
+                f"(blob-filtered, only: {', '.join(modules_opt)})"
             )
-        )
+        steps.append(Step(description=step_desc, run=sync_clone))
 
     def discover() -> str:
         found = discover_modules(fs, host_path)

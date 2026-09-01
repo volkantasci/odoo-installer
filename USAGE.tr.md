@@ -321,8 +321,9 @@ odoo-installer module add <oca-repo> [--modules m1,m2] [--sparse] [--repo YOL]
 - Klonlar sığ ve tek dallıdır (`--depth 1 --branch 19.0`).
 - `--modules m1,m2`: yalnızca bu modülleri kaydet (depo yine de tam mount edilir —
   `--sparse` kullanılmadıkça).
-- `--sparse`: git sparse-checkout yalnızca istenen modüllerle sınırlı — büyük depoları
-  (ör. OCA/web) küçük tutar.
+- `--sparse`: **blob-filtreli kısmi klon** (`git clone --filter=blob:none --sparse`) —
+  yalnızca istenen modüller indirilir; OCA/web gibi dev depolar birkaç megabyte'a
+  iner. Plan, sparse kapsamını açıkça duyurur.
 - `--repo YOL`: klonlamak yerine **mevcut yerel checkout'u** mount et. CLI, sahibi
   olmadığı bir checkout'ta asla dal değiştirmez veya dosya değiştirmez.
 - `--fork KULLANICI`: fork'unuzdan klonlar (`origin` = fork'unuz, `upstream` = OCA).

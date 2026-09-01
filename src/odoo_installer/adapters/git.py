@@ -19,6 +19,7 @@ class GitLike(Protocol):
     def fetch(self, path: Path) -> str: ...
     def checkout(self, path: Path, ref: str) -> str: ...
     def sparse_checkout_set(self, path: Path, dirs: list[str]) -> str: ...
+    def sparse_clone(self, url: str, path: Path, branch: str, dirs: list[str]) -> str: ...
     def is_repo(self, path: Path) -> bool: ...
     def remote_url(self, path: Path) -> str: ...
     def current_commit(self, path: Path) -> str: ...
@@ -51,6 +52,35 @@ class GitAdapter:
             ["git", "sparse-checkout", "init", "--cone"],
             f"enable sparse checkout in {path}",
             cwd=path,
+        )
+        return self._run(
+            ["git", "sparse-checkout", "set", *dirs],
+            f"sparse checkout {dirs} in {path}",
+            cwd=path,
+        )
+
+    def sparse_clone(self, url: str, path: Path, branch: str, dirs: list[str]) -> str:
+        """Blob-filtered partial clone + cone sparse checkout.
+
+        Downloads only the requested module dirs' blobs (git promisor fetch on
+        checkout) instead of the whole tree — a repo like OCA/web costs a couple of
+        megabytes instead of the full snapshot.
+        """
+        self._run(
+            [
+                "git",
+                "clone",
+                "--filter=blob:none",
+                "--sparse",
+                "--depth",
+                "1",
+                "--branch",
+                branch,
+                url,
+                str(path),
+            ],
+            f"sparse clone {url}",
+            timeout_s=1800,
         )
         return self._run(
             ["git", "sparse-checkout", "set", *dirs],
