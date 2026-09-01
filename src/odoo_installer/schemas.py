@@ -48,6 +48,7 @@ class GlobalConfig(BaseModel):
     port_range_start: int = PORT_ALLOCATION_START
     port_range_end: int = PORT_ALLOCATION_END
     github_token_env: str = "GITHUB_TOKEN"
+    tested_repo_url: str = ""
 
     @model_validator(mode="after")
     def _validate_port_range(self) -> Self:

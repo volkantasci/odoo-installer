@@ -79,6 +79,9 @@ odoo-installer db drop|reset <db> [--instance] [--yes] [--apply]
     Executed through psql in the db container. drop/reset always require --yes.
 
 odoo-installer module test <name> [--instance] [--keep-db]
+odoo-installer module approve <name...> --db DB [--instance]
+    Whitelist modules that are verified 'installed' in an explicit database
+    (evidence: ir_module_module state; no test log required).
     Install the module on a throwaway DB (oitest_<module>_<ts>), run its tests
     (--test-enable --test-tags /<module>), capture and parse the log, print PASS/FAIL.
 odoo-installer test suite [--instance <name>] [--only <repo>] [--modules m1,m2]
@@ -87,6 +90,9 @@ odoo-installer test suite [--instance <name>] [--only <repo>] [--modules m1,m2]
     repo or module list); one scratch DB (oitest_<module>) per module, sequential;
     PASS results are recorded in tested.toml; Markdown/JSON report + rich summary
     table. Exit 3 if any module fails.
+odoo-installer test pull [--apply]
+    Merge the central whitelist repo's tested.toml (config: tested_repo_url) into
+    the active whitelist: union by module name, newer tested_at wins.
 
 odoo-installer config show | set <key> <value> | edit | path
 odoo-installer version
@@ -260,9 +266,9 @@ volumes: { pgdata: }
 
 | File | Scope | Content |
 |------|-------|---------|
-| `~/.config/odoo-installer/config.toml` | global user config | instance root, default ports, default pg tag, GitHub token env var name |
+| `~/.config/odoo-installer/config.toml` | global user config | instance root, default ports, default pg tag, GitHub token env var name, central whitelist repo URL (`tested_repo_url`) |
 | `~/.config/odoo-installer/registry.toml` | instance registry | `name → {dir, http_port, created_at, adopted: bool}` |
-| `~/.config/odoo-installer/tested.toml` | installable-addons whitelist | `module → {repo, branch, commit, db, log_path}`; written by `module test` / `test suite` PASSes; `module install`/`upgrade` refuse modules that are not listed unless `--allow-untested` |
+| `~/.config/odoo-installer/tested.toml` | installable-addons whitelist | `module → {repo, branch, commit, db, log_path}`; written by `module test` / `test suite` PASSes and `module approve` (verified installed state); `module install`/`upgrade` refuse modules that are not listed unless `--allow-untested`. A central copy can live in a git repo (`tested_repo_url` config key) and be merged in with `test pull` — union by module name, newer tested_at wins |
 | `<stack>/.odoo-installer.json` | per instance | schema_version, odoo_version, image, pg_tag, applied steps, added repos `{repo, url, branch, commit, modules, mount}`, adopted flag |
 | `<stack>/repos/<repo>/` | OCA clones | git state is the truth for branch/commit; manifest records the last synced commit |
 

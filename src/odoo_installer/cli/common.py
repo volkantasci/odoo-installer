@@ -49,3 +49,29 @@ def record_tested_pass(
         ),
         path=container.tested_path,
     )
+
+
+def record_approved(
+    container: deps.Container,
+    manifest: InstanceManifest,
+    module: str,
+    source: str,
+    db: str,
+) -> None:
+    """Record a verified installed module in the whitelist (tested.toml).
+
+    Used by `module approve`: the evidence is the module's `installed` state in an
+    explicit database, so there is no test log to reference.
+    """
+    repo_record = next((r for r in manifest.repos if module in r.modules or r.repo == source), None)
+    record_tested_module(
+        TestedModule(
+            name=module,
+            repo=source,
+            branch=repo_record.branch if repo_record else ODOO_VERSION,
+            commit=repo_record.commit if repo_record else "",
+            db=db,
+            log_path="",
+        ),
+        path=container.tested_path,
+    )

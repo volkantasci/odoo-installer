@@ -398,6 +398,17 @@ PASS web_responsive (3.2s) — log: .../logs/test-web_responsive-20260901.log
 ✔ web_responsive recorded as tested/installable (whitelist: .../tested.toml)
 ```
 
+#### Approve already-proven modules
+
+```bash
+odoo-installer module approve <name...> --db DB [--instance NAME]
+```
+
+Records modules in the whitelist **without re-running tests** — the evidence is the
+module's `installed` state in an explicit database (verified before anything is
+written; anything else is refused). Use it on a stack where the module is already
+running in production and you want every machine to treat it as installable.
+
 ### 4.7 `test suite` — batch testing
 
 ```bash
@@ -410,6 +421,20 @@ one scratch database at a time), with a fresh `oitest_<module>` scratch DB per m
 PASSes feed the whitelist. `--only` restricts to one source repo (`web` or `OCA/web`);
 `--modules` pins an explicit list. `--output` is repeatable and writes a Markdown
 and/or JSON report. Exits **3** when any module fails.
+
+#### Central whitelist repo (`test pull`)
+
+Point `tested_repo_url` at a small git repo whose root holds a `tested.toml`, then:
+
+```bash
+odoo-installer config set tested_repo_url https://github.com/<org>/odoo-installer-tested.git
+odoo-installer test pull --apply
+```
+
+The pull refreshes a local cache clone and **merges** the repo's entries into the
+active whitelist: union by module name, the newer `tested_at` wins. Approvals made on
+any machine (test PASSes or `module approve`) spread to every machine that pulls — the
+CLI itself never needs updating for new approvals, only the repo does.
 
 ```console
 $ odoo-installer test suite --only web --output report.md --output report.json

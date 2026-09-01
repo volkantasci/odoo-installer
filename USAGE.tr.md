@@ -405,6 +405,17 @@ PASS web_responsive (3.2s) — log: .../logs/test-web_responsive-20260901.log
 ✔ web_responsive test edildi/kurulabilir olarak kaydedildi (beyaz liste: .../tested.toml)
 ```
 
+#### Zaten kanıtlanmış modülleri onaylama
+
+```bash
+odoo-installer module approve <ad...> --db DB [--instance AD]
+```
+
+Modülleri **testleri yeniden çalıştırmadan** beyaz listeye kaydeder — kanıt, modülün
+açık bir veritabanındaki `installed` durumudur (yazmadan önce doğrulanır; başka durumda
+olanlar reddedilir). Modülün bir stack'te üretimde zaten çalıştığı ve her makinenin onu
+kurulabilir saymasını istediğiniz durumlarda kullanın.
+
 ### 4.7 `test suite` — toplu test
 
 ```bash
@@ -417,6 +428,21 @@ anda tek scratch veritabanı), her modül için taze `oitest_<modül>` scratch D
 kullanır. PASS'ler beyaz listeye işlenir. `--only` tek kaynak depoyla sınırlar (`web`
 veya `OCA/web`); `--modules` açık liste sabitler. `--output` tekrarlanabilir; Markdown
 ve/veya JSON raporu yazar. Herhangi bir modül başarısız olursa **3** koduyla çıkar.
+
+#### Merkezi whitelist reposu (`test pull`)
+
+`tested_repo_url`'ı kökünde `tested.toml` tutan küçük bir git reposuna yönlendirin, sonra:
+
+```bash
+odoo-installer config set tested_repo_url https://github.com/<org>/odoo-installer-tested.git
+odoo-installer test pull --apply
+```
+
+Pull, yerel önbellek klonunu tazeler ve repodaki girdileri etkin whitelist'e
+**birleştirir**: modül adına göre birleşim, çakışmada daha yeni `tested_at` kazanır.
+Herhangi bir makinede yapılan onaylar (test PASS'i veya `module approve`) pull çeken
+her makineye yayılır — yeni onaylar için CLI'ı güncellemek gerekmez, yalnızca repo'yu
+güncellemek yeterlidir.
 
 ```console
 $ odoo-installer test suite --only web --output rapor.md --output rapor.json

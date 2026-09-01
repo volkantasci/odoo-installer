@@ -17,14 +17,24 @@ import typer
 from odoo_installer.cli import deps
 from odoo_installer.cli.common import record_tested_pass, resolve_instance
 from odoo_installer.config import instance_logs_dir
-from odoo_installer.console import console, error, render_suite_summary, render_test_outcome
+from odoo_installer.console import (
+    console,
+    error,
+    progress_reporter,
+    render_plan,
+    render_suite_summary,
+    render_test_outcome,
+)
 from odoo_installer.core.modules import available_modules
+from odoo_installer.core.plan import apply_steps
+from odoo_installer.core.tested import tested_pull_plan
 from odoo_installer.core.tester import TestOutcome, drop_scratch_db, run_module_test
 from odoo_installer.exceptions import OdooInstallerError
 
 app = typer.Typer(no_args_is_help=True, help="Batch-test an instance's modules.")
 
 _INSTANCE_HELP = "Target instance (default: the only registered instance)."
+_APPLY_HELP = "Execute the plan (without it, this is a dry run)."
 
 
 def _repo_matches(source: str, only: str) -> bool:
@@ -178,3 +188,39 @@ def suite(
     failed = sum(1 for o in outcomes if not o.passed)
     if failed:
         raise typer.Exit(code=3)
+
+
+@app.command("pull")
+def pull(
+    *,
+    apply_changes: Annotated[bool, typer.Option("--apply", help=_APPLY_HELP)] = False,
+) -> None:
+    """Sync the whitelist from the central git repo (config: tested_repo_url).
+
+    Merges the repo's tested.toml into the active whitelist: union by module name,
+    newer tested_at wins — approvals made anywhere spread to every machine that
+    pulls.
+    """
+    container = deps.build()
+    url = container.config.tested_repo_url
+    if not url:
+        error(
+            "no whitelist repo configured; run: odoo-installer config set tested_repo_url <git-url>"
+        )
+        raise typer.Exit(code=1) from None
+    plan = tested_pull_plan(
+        url=url, git=container.git, fs=container.fs, active_path=container.tested_path
+    )
+    if not apply_changes:
+        render_plan(plan.steps, f"Whitelist pull plan: {url}")
+        return
+    try:
+        apply_steps(plan.steps, on_step=progress_reporter())
+    except OdooInstallerError as exc:
+        error(str(exc))
+        raise typer.Exit(code=1) from None
+    console.print(
+        f"[green]✔[/green] whitelist synced from {url}: "
+        f"+{plan.summary['added']} added, {plan.summary['updated']} updated "
+        f"({plan.summary['total']} approved modules)"
+    )

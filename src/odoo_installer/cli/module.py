@@ -15,7 +15,7 @@ from typing import Annotated
 import typer
 
 from odoo_installer.cli import deps
-from odoo_installer.cli.common import record_tested_pass, resolve_instance
+from odoo_installer.cli.common import record_approved, record_tested_pass, resolve_instance
 from odoo_installer.config import (
     get_tested_module,
     instance_logs_dir,
@@ -398,4 +398,51 @@ def test(
     console.print(
         f"[green]✔[/green] {module} recorded as tested/installable "
         f"(whitelist: {container.tested_path})"
+    )
+
+
+@app.command("approve")
+def approve(
+    modules: Annotated[list[str], typer.Argument(help="Module names to whitelist.")],
+    *,
+    db: Annotated[str, typer.Option("--db", help=_DB_HELP)],
+    instance: Annotated[str | None, typer.Option("--instance", help=_INSTANCE_HELP)] = None,
+) -> None:
+    """Whitelist modules that are verified 'installed' in an explicit database.
+
+    For modules whose quality is already proven on a running stack (e.g. approved on
+    the production instance): the command refuses anything that is not in
+    `installed` state in --db, then records the entries in tested.toml.
+    """
+    container = deps.build()
+    try:
+        manifest = resolve_instance(container, instance)
+        available = available_modules(container.fs, manifest)
+        missing = [m for m in modules if m not in available]
+        if missing:
+            raise OdooInstallerError(
+                f"modules not visible to this instance: {', '.join(missing)}; "
+                "run 'module add' first"
+            )
+        states = module_states(
+            container.docker,
+            manifest.dir,
+            manifest.db_service,
+            manifest.db_user,
+            db,
+            modules,
+        )
+        bad = [m for m in modules if states.get(m) != "installed"]
+        if bad:
+            raise OdooInstallerError(
+                "refusing to approve — not in 'installed' state in db "
+                f"{db!r}: " + ", ".join(f"{m} ({states.get(m, 'not in db')})" for m in bad)
+            )
+        for m in modules:
+            record_approved(container, manifest, m, available[m], db)
+    except OdooInstallerError as exc:
+        error(str(exc))
+        raise typer.Exit(code=1) from None
+    console.print(
+        f"[green]✔[/green] approved (whitelist: {container.tested_path}): {', '.join(modules)}"
     )

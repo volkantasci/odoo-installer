@@ -302,3 +302,35 @@ def test_module_test_invisible_module_exits_1(patch_deps, tmp_path: Path) -> Non
     result = runner.invoke(app, ["module", "test", "ghost_module"])
     assert result.exit_code == 1, result.output
     assert "not visible" in result.output
+
+
+def test_module_approve_records_whitelisted_modules(patch_deps, tmp_path: Path) -> None:
+    container, _ = prepared_instance(tmp_path, patch_deps)
+    runner.invoke(app, ["module", "add", "server-utils", "--apply"])
+    container.docker.compose_results = ["server_util_foo|installed\n"]
+    result = runner.invoke(app, ["module", "approve", "server_util_foo", "--db", "dev"])
+    assert result.exit_code == 0, result.output
+    assert "approved" in result.output
+    import tomllib
+
+    data = tomllib.loads((container.tested_path).read_text(encoding="utf-8"))
+    assert data["modules"]["server_util_foo"]["repo"] == "OCA/server-utils"
+    assert data["modules"]["server_util_foo"]["db"] == "dev"
+    assert data["modules"]["server_util_foo"]["branch"] == "19.0"
+
+
+def test_module_approve_refuses_not_installed(patch_deps, tmp_path: Path) -> None:
+    container, _ = prepared_instance(tmp_path, patch_deps)
+    runner.invoke(app, ["module", "add", "server-utils", "--apply"])
+    container.docker.compose_results = ["server_util_foo|uninstalled\n"]
+    result = runner.invoke(app, ["module", "approve", "server_util_foo", "--db", "dev"])
+    assert result.exit_code == 1
+    assert "not in 'installed' state" in result.output
+    assert not container.tested_path.exists()
+
+
+def test_module_approve_refuses_invisible_module(patch_deps, tmp_path: Path) -> None:
+    prepared_instance(tmp_path, patch_deps)
+    result = runner.invoke(app, ["module", "approve", "ghost_module", "--db", "dev"])
+    assert result.exit_code == 1
+    assert "not visible" in result.output

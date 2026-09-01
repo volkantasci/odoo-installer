@@ -63,10 +63,12 @@ odoo-installer db list|create|drop|reset          # drop/reset need --apply --ye
 odoo-installer module add <oca-repo> [--modules m1,m2] [--sparse] [--repo PATH] [--apply]
 odoo-installer module list [--instance NAME] [--json] | search <query>
 odoo-installer module test <module>          # scratch-db test run; PASS -> whitelist
+odoo-installer module approve <module...> --db DB  # whitelist verified installed modules
 odoo-installer module install|upgrade <module...> --db DB   # refuses untested modules
 odoo-installer module remove <repo> [--purge-repo] [--apply]
 odoo-installer test suite [--only <repo>] [--modules m1,m2]
                           [--output report.{md,json}] [--keep-db]
+odoo-installer test pull [--apply]          # merge central whitelist repo (tested_repo_url)
 ```
 
 The full, precise command surface is specified in [DEVELOPMENT.md](DEVELOPMENT.md) §2.
