@@ -5,6 +5,29 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-09-01
+
+### Fixed
+
+- **Module mounts now actually reach the container:** after `module add`/`module
+  remove` the CLI runs `docker compose up -d <web>` instead of `docker compose
+  restart`. A plain restart reuses the old container and would never mount the new
+  volume, leaving the module invisible to `module install`/`test` inside Odoo.
+- `module remove` now validates the edited compose file with `docker compose config`
+  and restores the original on failure (previously only `module add` did).
+- `module add` refuses a different repo whose short name would mount onto an already
+  used container path (e.g. adding `myfork/web` while `OCA/web` is mounted at
+  `/mnt/oca/web`) instead of writing a conflicting duplicate mount.
+- Mount idempotency now accepts both the absolute and the relative (e.g.
+  `./repos/oca-web`) form of a mount line, so a hand-written relative mount never
+  gets a duplicate absolute twin.
+
+### Changed
+
+- After `module add` the CLI prints the next steps (`module test` → whitelist →
+  `module install --db`) and adopted stacks are told to *recreate* the web service
+  (`docker compose up -d web`), not restart it.
+
 ## [0.3.1] - 2026-09-01
 
 ### Added
