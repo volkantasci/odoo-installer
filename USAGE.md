@@ -550,6 +550,18 @@ mount.
 check the last lines of the captured output (shown dimmed) and the module's
 dependencies.
 
+**The database manager asks for a master password — where is it?**
+Odoo never pre-fills that field (a browser may autofill a previously saved password).
+`instance create` generates a random master password and stores it in `<stack>/.env`
+(`ADMIN_PASSWD=...`) and in `<stack>/config/odoo.conf` (`admin_passwd = ...`). Use the
+value from either file. To set your own, edit `admin_passwd` in `config/odoo.conf`
+(and `.env` for consistency) and run `odoo-installer instance restart <name>`.
+
+**Two instances want the same port (8069).**
+Port auto-allocation picks the first port that is free *right now* — a stopped stack
+does not reserve its port. If two registered instances share a port, start them one at
+a time, or recreate one on another port (e.g. `instance create <name> --http-port 8070`).
+
 **Where are the test logs?**
 Created instances: `<stack>/logs/test-<module>-<ts>.log`. Adopted instances:
 `~/.local/state/odoo-installer/logs/<name>/` (XDG state dir — the CLI never writes into

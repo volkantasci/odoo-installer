@@ -561,6 +561,19 @@ yeniden başlatın (ör. `./restart.sh`).
 koduyla çıkar — yakalanan çıktının son satırlarına (soluk yazdırılır) ve modülün
 bağımlılıklarına bakın.
 
+**Veritabanı yöneticisi master password soruyor — şifre nerede?**
+Odoo bu alanı asla otomatik doldurmaz (tarayıcı daha önce kaydedilmiş bir şifreyi
+autofill edebilir). `instance create` rastgele bir master password üretir ve
+`<stack>/.env` (`ADMIN_PASSWD=...`) ile `<stack>/config/odoo.conf`
+(`admin_passwd = ...`) dosyalarına yazar. İkisinden birindeki değeri kullanın. Kendi
+şifrenizi belirlemek için `config/odoo.conf` içindeki `admin_passwd`'i (tutarlılık için
+`.env`'i de) düzenleyip `odoo-installer instance restart <ad>` çalıştırın.
+
+**İki instance aynı portu (8069) istiyor.**
+Otomatik port atama, *o an* boş olan ilk portu seçer — durdurulmuş bir stack portunu
+rezerve etmez. İki kayıtlı instance aynı portu paylaşıyorsa onları sırayla başlatın ya
+da birini başka portta yeniden oluşturun (ör. `instance create <ad> --http-port 8070`).
+
 **Test logları nerede?**
 Oluşturulan instance'lar: `<stack>/logs/test-<modül>-<ts>.log`. Sahiplenilen
 instance'lar: `~/.local/state/odoo-installer/logs/<ad>/` (XDG state dizini — CLI
