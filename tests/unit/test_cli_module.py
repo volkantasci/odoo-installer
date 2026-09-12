@@ -231,6 +231,68 @@ def test_module_add_no_resolve_deps_skips_provisioning(patch_deps, tmp_path: Pat
     assert [r.repo for r in loaded.repos] == ["OCA/account-financial-report"]
 
 
+def test_module_add_whole_repo_dry_run_notes_late_provisioning(patch_deps, tmp_path: Path) -> None:
+    container, _ = prepared_instance(tmp_path, patch_deps)
+    cross_repo_container(container)
+    result = runner.invoke(app, ["module", "add", "account-financial-report"])
+    assert result.exit_code == 0, result.output
+    assert "whole-repo add" in result.output
+    assert "Dependency plan" not in result.output  # nothing known before the clone
+    assert "no dependencies found" in result.output  # the honest empty report
+
+
+def test_module_add_whole_repo_provisions_late(patch_deps, tmp_path: Path) -> None:
+    """`module add <repo>` (no --modules) must provision cross-repo providers from
+    the fresh clone and recreate the web service exactly once."""
+    container, manifest = prepared_instance(tmp_path, patch_deps)
+    checkout = tmp_path / "checkout-afr"
+    module_dir = checkout / "account_financial_report"
+    module_dir.mkdir(parents=True)
+    (module_dir / "__manifest__.py").write_text(
+        '{"depends": ["base", "date_range"]}', encoding="utf-8"
+    )
+    container.git = FakeGit(  # type: ignore[assignment]
+        existing={checkout},
+        remote="https://github.com/OCA/account-financial-report.git",
+    )
+    container.github = FakeGitHub(  # type: ignore[assignment]
+        module_manifests={"OCA/server-ux/date_range": '{"depends": ["base"]}'},
+        org_modules={"date_range": "OCA/server-ux"},
+    )
+    container.docker = FakeDocker(compose_results=["base\nweb\nmail\nbus"] * 4)
+    result = runner.invoke(
+        app, ["module", "add", "account-financial-report", "--repo", str(checkout), "--apply"]
+    )
+    assert result.exit_code == 0, result.output
+    sparse_dirs = [dirs for _u, _p, dirs in container.git.sparse_cloned]
+    assert sparse_dirs == [["date_range"]]  # late-phase provision ran
+    assert "resolving dependency OCA/server-ux" in result.output
+    loaded = InstanceManifest.model_validate_json(
+        (manifest.dir / ".odoo-installer.json").read_text(encoding="utf-8")
+    )
+    assert sorted(r.repo for r in loaded.repos) == [
+        "OCA/account-financial-report",
+        "OCA/server-ux",
+    ]
+    compose = (manifest.dir / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "/mnt/oca/server-ux" in compose
+    assert [args for args, _ in container.docker.compose_calls].count(("up", "-d", "web")) == 1
+
+
+def test_module_add_container_offline_warns_but_provisions(patch_deps, tmp_path: Path) -> None:
+    """Container down: resolved providers are still provisioned, misses are warned."""
+    container, _ = prepared_instance(tmp_path, patch_deps)
+    cross_repo_container(container)
+    container.docker = FakeDocker(compose_results=[""] * 4)  # core listing unavailable
+    result = runner.invoke(
+        app,
+        ["module", "add", "account-financial-report", "--modules", "account_financial_report"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "container offline" in result.output
+    assert "Dependency plan: OCA/server-ux (provides date_range)" in result.output
+
+
 def test_module_search_renders_results(patch_deps, tmp_path: Path) -> None:
     from odoo_installer.schemas import RepoSummary
 
@@ -278,7 +340,9 @@ def test_module_install_runs_odoo_and_reports_state(patch_deps, tmp_path: Path) 
         ],
     )
     assert result.exit_code == 0, result.output
-    exec_calls = [args for args, _ in container.docker.compose_calls if args[0] == "exec"]
+    exec_calls = [
+        args for args, _ in container.docker.compose_calls if args[0] == "exec" and "odoo" in args
+    ]
     assert exec_calls, "expected an odoo exec call"
     args = exec_calls[0]
     assert "odoo" in args and "-i" in args and "--stop-after-init" in args
@@ -325,7 +389,10 @@ def test_module_upgrade_uses_u_flag(patch_deps, tmp_path: Path) -> None:
         ],
     )
     assert result.exit_code == 0, result.output
-    exec_calls = [args for args, _ in container.docker.compose_calls if args[0] == "exec"]
+    exec_calls = [
+        args for args, _ in container.docker.compose_calls if args[0] == "exec" and "odoo" in args
+    ]
+    assert exec_calls, "expected an odoo exec call"
     assert "-u" in exec_calls[0]
 
 

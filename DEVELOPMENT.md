@@ -330,7 +330,13 @@ The tool must behave exactly like the documented OCA workflow:
    final web-service recreate (`--no-resolve-deps` disables). An already-mounted
    sparse provider repo is EXTENDED to include the dep instead of failing.
    Unresolvable providers (not core, not mounted, not cataloged, not found in the
-   org) abort with guidance — never guessed.
+   org) abort with guidance when the core listing succeeded; when the container is
+   offline, probing still runs and only the unexplainable names are tolerated with a
+   warning. Whole-repo adds (`module add <repo>` without `--modules`) cannot know
+   their module set before the clone: the main plan defers provisioning to
+   `late_dep_provisions`, which re-resolves every discovered module's cross-repo
+   deps from the fresh clone right after it is placed (then recreates once);
+   unresolvable names there are warnings, not aborts (bulk semantics).
 
 ---
 

@@ -277,19 +277,29 @@ oii module add <oca-repo> [--modules m1,m2] [--sparse] [--repo PATH]
   - **already available** — provided by the local addons or another mounted repo.
 - **Cross-repo dependencies are provisioned automatically.** The whitelist catalog
   (tested.toml) is asked first; anything it cannot explain is discovered by probing
-  the OCA org's repos (raw manifests, transitive). Each provider repo is
-  sparse-cloned at the 19.0 branch into the instance's repos dir, mounted, recorded —
-  **before** the main repo — and the web service is recreated ONCE at the end:
+  the OCA org's repos (raw manifests, transitive — no running container required).
+  Each provider repo is sparse-cloned at the 19.0 branch into the instance's repos
+  dir, mounted, recorded — **before** the main repo — and the web service is
+  recreated ONCE at the end:
 
   ```console
   $ oii module add account-financial-report --modules account_financial_report
   Module add plan: OCA/account-financial-report
      ...
   Dependency plan: OCA/server-ux (provides date_range)
-     ...
+     ... (mount only — goes live together with the main repo's recreate)
   Dependency plan: OCA/reporting-engine (provides report_xlsx)
      ...
   ```
+
+  Whole-repo adds (`oii module add <repo>`, no `--modules`) cannot know their module
+  set before the clone, so provisioning runs as a late phase right after the repo is
+  placed: every discovered module's cross-repo deps are re-resolved from the clone,
+  providers are mounted, and the web service is recreated once. Unresolvable names
+  in this bulk path are warnings, not aborts.
+- When the web container is offline, probing still runs: resolved providers are
+  provisioned, and only the unexplainable names are tolerated with a warning (Odoo
+  re-checks them at install time).
 - `--no-resolve-deps` skips the provider provisioning (the repo is added as-is; an
   unmet dep aborts the later install with guidance).
 - `--sparse` performs a **blob-filtered partial clone**

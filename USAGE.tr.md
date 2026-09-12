@@ -279,19 +279,29 @@ oii module add <oca-repo> [--modules m1,m2] [--sparse] [--repo YOL]
     sağlanıyor.
 - **Çapraz-repo bağımlılıklar otomatik provision edilir.** Önce whitelist kataloğuna
   (tested.toml) bakılır; orada açıklanamayan bağımlılık, OCA org'unun repolarında
-  taranarak (raw manifest'ler, geçişli) bulunur. Her sağlayıcı repo, 19.0 dalında
-  instance'ın repos dizinine sparse klonlanır, mount edilir ve kaydedilir — ana
-  repodan ÖNCE — ve web servisi en sonda TEK SEFERDE yeniden yaratılır:
+  taranarak (raw manifest'ler, geçişli — çalışan konteyner gerekmez) bulunur. Her
+  sağlayıcı repo, 19.0 dalında instance'ın repos dizinine sparse klonlanır, mount
+  edilir ve kaydedilir — **ana repodan ÖNCE** — ve web servisi en sonda TEK SEFERDE
+  yeniden yaratılır:
 
   ```console
   $ oii module add account-financial-report --modules account_financial_report
   Module add plan: OCA/account-financial-report
      ...
   Dependency plan: OCA/server-ux (provides date_range)
-     ...
+     ... (mount only — goes live together with the main repo's recreate)
   Dependency plan: OCA/reporting-engine (provides report_xlsx)
      ...
   ```
+
+  Tüm-repo eklemeleri (`oii module add <repo>`, `--modules` olmadan) modül setini
+  klonlamadan bilemez; bu yüzden provision, repo yerleştikten HEMEN SONRA geç bir faz
+  olarak çalışır: keşfedilen her modülün çapraz-repo bağımlılığı klon üzerinden
+  yeniden çözülür, sağlayıcılar mount edilir ve web servisi bir kez recreate edilir.
+  Bu toplu yolda çözülemeyen adlar hata değil, uyarıdır.
+- Web konteyneri kapalıyken tarama yine çalışır: çözülen sağlayıcılar provision
+  edilir; yalnızca açıklanamayan adlar uyarıyla tolere edilir (Odoo kurulumda yeniden
+  kontrol eder).
 - `--no-resolve-deps` sağlayıcı provision'unu atlar (repo olduğu gibi eklenir;
   karşılanmayan bağımlılık sonraki kurulumda ipucuyla düşer).
 - `--sparse` **blob-filtreli kısmi klon** yapar
