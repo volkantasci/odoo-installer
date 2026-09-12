@@ -155,11 +155,14 @@ class FakeGitHub:
         *,
         branch_exists: bool = True,
         module_manifests: dict[str, str] | None = None,
+        org_modules: dict[str, str] | None = None,
     ) -> None:
         self._branch_exists = branch_exists
         self._module_manifests = module_manifests or {}
+        self._org_modules = org_modules or {}  # {module: "OCA/repo"} probed hit list
         self.branch_checks: list[tuple[str, str]] = []
         self.manifest_fetches: list[tuple[str, str, str, str]] = []
+        self.module_repo_probes: list[tuple[tuple[str, ...], str, str]] = []
 
     def ping(self) -> str:
         return "api.github.com reachable (4999 core requests left, unauthenticated)"
@@ -170,7 +173,16 @@ class FakeGitHub:
 
     def fetch_module_manifest(self, owner: str, repo: str, branch: str, module: str) -> str | None:
         self.manifest_fetches.append((owner, repo, branch, module))
+        scoped = self._module_manifests.get(f"{owner}/{repo}/{module}")
+        if scoped is not None:
+            return scoped
         return self._module_manifests.get(module)
+
+    def find_module_repos(
+        self, modules: list[str], branch: str, org: str = "OCA"
+    ) -> dict[str, str]:
+        self.module_repo_probes.append((tuple(sorted(modules)), branch, org))
+        return {m: r for m, r in self._org_modules.items() if m in set(modules)}
 
     def search_repos(self, query: str, limit: int = 10) -> list[RepoSummary]:
         return []

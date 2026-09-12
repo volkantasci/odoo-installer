@@ -253,6 +253,7 @@ explicit; `postgres`/`template0`/`template1` are refused; `drop`/`reset` need
 ```bash
 oii module add <oca-repo> [--modules m1,m2] [--sparse] [--repo PATH]
                          [--fork USER] [--instance NAME] [--yes] [--apply]
+                         [--resolve-deps/--no-resolve-deps]
 ```
 
 - The argument is a **repo** (`web`, `OCA/server-tools`) — not a module name. The
@@ -271,9 +272,26 @@ oii module add <oca-repo> [--modules m1,m2] [--sparse] [--repo PATH]
   - **core** — verified by listing the running container's core addons dir;
   - **same-repo** — siblings in the same repo; they join the sparse clone
     automatically, so the later install cannot fail with "module not found";
-  - **other-repo** — provider repo named in the plan; mounted later by
-    `install --resolve-deps`;
+  - **other-repo** — provider repo named in the plan; provisioned automatically (see
+    below);
   - **already available** — provided by the local addons or another mounted repo.
+- **Cross-repo dependencies are provisioned automatically.** The whitelist catalog
+  (tested.toml) is asked first; anything it cannot explain is discovered by probing
+  the OCA org's repos (raw manifests, transitive). Each provider repo is
+  sparse-cloned at the 19.0 branch into the instance's repos dir, mounted, recorded —
+  **before** the main repo — and the web service is recreated ONCE at the end:
+
+  ```console
+  $ oii module add account-financial-report --modules account_financial_report
+  Module add plan: OCA/account-financial-report
+     ...
+  Dependency plan: OCA/server-ux (provides date_range)
+     ...
+  Dependency plan: OCA/reporting-engine (provides report_xlsx)
+     ...
+  ```
+- `--no-resolve-deps` skips the provider provisioning (the repo is added as-is; an
+  unmet dep aborts the later install with guidance).
 - `--sparse` performs a **blob-filtered partial clone**
   (`git clone --filter=blob:none --sparse --depth 1`) — only the requested modules
   download.
@@ -313,8 +331,10 @@ reads each target's `__manifest__.py`:
 - deps provided by **Odoo core** (verified by listing the web container's core
   addons) or by **already-mounted repos** just work;
 - a dep whose provider repo is **not mounted** is refused with the provider named —
-  add `--resolve-deps` to mount the provider repos automatically (from the whitelist
-  catalog) and include the deps in the install;
+  add `--resolve-deps` to mount the provider repos automatically (whitelist catalog
+  first, then OCA-wide raw-manifest probing) and include the deps in the install;
+- a provider that IS mounted as a sparse clone but lacks the dep extends its sparse
+  set automatically;
 - unknown providers are reported honestly with a `module search` hint.
 
 #### Remove

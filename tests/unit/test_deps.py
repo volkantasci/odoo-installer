@@ -184,3 +184,116 @@ def test_resolve_dependencies_docker_failure_degrades(tmp_path: Path) -> None:
     # verified, so even Odoo-core-looking deps are reported unresolved, not guessed
     assert resolution.unresolved == ["product"]
     assert resolution.to_mount == []
+
+
+# --- GitHub probing fallback (cross-repo providers beyond the catalog) --------
+
+
+def test_resolve_dependencies_probes_unknown_provider(tmp_path: Path) -> None:
+    """With github passed, a dep the catalog cannot explain is probed across OCA."""
+    from fakes import FakeGitHub
+
+    fs = FakeFs()
+    manifest = _manifest(tmp_path)
+    _write_manifest(fs, tmp_path / "inst" / "addons" / "local" / "pim", ["product", "date_range"])
+    github = FakeGitHub(
+        module_manifests={
+            "OCA/server-ux/date_range": '{"depends": ["base"]}',
+        },
+        org_modules={"date_range": "OCA/server-ux"},
+    )
+    docker = FakeDocker(compose_results=[CORE_ADDONS])
+    resolution = resolve_dependencies(
+        fs=fs,
+        manifest=manifest,
+        docker=docker,
+        targets=["pim"],
+        catalog={},
+        github=github,
+    )
+    assert resolution.to_mount == [("OCA/server-ux", "19.0", ["date_range"])]
+    assert resolution.to_install == ["pim", "date_range"]
+    assert resolution.unresolved == []
+
+
+def test_resolve_dependencies_probe_miss_is_unresolved(tmp_path: Path) -> None:
+    from fakes import FakeGitHub
+
+    fs = FakeFs()
+    manifest = _manifest(tmp_path)
+    _write_manifest(fs, tmp_path / "inst" / "addons" / "local" / "pim", ["product", "not_anywhere"])
+    github = FakeGitHub(org_modules={})
+    docker = FakeDocker(compose_results=[CORE_ADDONS])
+    resolution = resolve_dependencies(
+        fs=fs,
+        manifest=manifest,
+        docker=docker,
+        targets=["pim"],
+        catalog={},
+        github=github,
+    )
+    assert resolution.unresolved == ["not_anywhere"]
+    assert len(github.module_repo_probes) == 1  # probed once, never again
+
+
+def test_resolve_dependencies_provided_probe_results_are_reused(tmp_path: Path) -> None:
+    from fakes import FakeGitHub
+
+    fs = FakeFs()
+    manifest = _manifest(tmp_path)
+    _write_manifest(fs, tmp_path / "inst" / "addons" / "local" / "pim", ["product", "date_range"])
+    github = FakeGitHub(org_modules={"date_range": "OCA/server-ux"})
+    docker = FakeDocker(compose_results=[CORE_ADDONS])
+    resolution = resolve_dependencies(
+        fs=fs,
+        manifest=manifest,
+        docker=docker,
+        targets=["pim"],
+        catalog={},
+        github=github,
+        providers={"date_range": ("OCA/server-ux", ["base"])},
+    )
+    assert resolution.to_mount == [("OCA/server-ux", "19.0", ["date_range"])]
+    assert github.module_repo_probes == []  # pre-probed results, no network probe
+
+
+def test_resolve_dependencies_extends_mounted_sparse_repo(tmp_path: Path) -> None:
+    fs = FakeFs()
+    stack = tmp_path / "inst"
+    # the sparse clone only materialized a SIBLING module; web_dark_mode is absent
+    _write_manifest(fs, stack / "repos" / "oca-web" / "web_responsive", ["web"])
+    manifest = InstanceManifest(
+        name="dev",
+        dir=stack,
+        odoo_version="19.0",
+        image="odoo:19.0",
+        pg_tag=17,
+        http_port=8070,
+        repos=[
+            RepoRecord(
+                repo="OCA/web",
+                url="https://github.com/OCA/web.git",
+                branch="19.0",
+                commit="d4bfccf5",
+                host_path=stack / "repos" / "oca-web",
+                container_path="/mnt/oca/web",
+                modules=["web_responsive"],
+                sparse=True,
+            )
+        ],
+    )
+    _write_manifest(fs, stack / "addons" / "local" / "pim", ["product", "web_dark_mode"])
+    docker = FakeDocker(compose_results=[CORE_ADDONS])
+    resolution = resolve_dependencies(
+        fs=fs,
+        manifest=manifest,
+        docker=docker,
+        targets=["pim"],
+        catalog={
+            "web_dark_mode": TestedModule(
+                name="web_dark_mode", repo="OCA/web", branch="19.0", deps=[]
+            ),
+        },
+    )
+    assert resolution.to_mount == []
+    assert resolution.to_extend == [("OCA/web", ["web_dark_mode"])]

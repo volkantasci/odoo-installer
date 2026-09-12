@@ -23,7 +23,7 @@ from odoo_installer.adapters.docker import DockerLike
 from odoo_installer.adapters.filesystem import FileSystemLike
 from odoo_installer.adapters.git import GitLike
 from odoo_installer.adapters.github import GitHubLike
-from odoo_installer.constants import ODOO_VERSION
+from odoo_installer.constants import OCA_ORG, ODOO_VERSION
 from odoo_installer.core.instances import (
     COMPOSE_NAME,
     MANIFEST_NAME,
@@ -58,6 +58,10 @@ class ModuleDepReport:
     available: set[str] = field(default_factory=set)
     unknown: list[str] = field(default_factory=list)
     raw: dict[str, list[str]] = field(default_factory=dict)
+    providers: dict[str, tuple[str, list[str]]] = field(default_factory=dict)
+    # ^ {dep: (provider repo "OCA/x", its __manifest__ deps)} — discovered by probing
+    # raw manifests across the OCA org when neither core, the mounts nor the whitelist
+    # catalog explain a dependency.
 
     @staticmethod
     def _shorten(names: Iterable[str], limit: int = 8) -> str:
@@ -129,27 +133,51 @@ def _resolve_requested_module_deps(
     for record in manifest.repos:
         provided.update(record.modules or [])
     provided.update(discover_modules(fs, manifest.dir / "addons" / "local"))
-    report.available = set()
+    requested = set(report.requested)
 
+    # first pass: read the requested modules' manifests and find same-repo siblings
+    # (they join the sparse clone; probing them would be wasted network work)
+    raw: dict[str, list[str]] = {}
+    same_repo_seen: set[str] = set()
+    candidates: set[str] = set()
     for module in modules_opt:
         text = github.fetch_module_manifest(owner, name, branch, module)
         deps = parse_manifest_deps(text) if text is not None else []
         report.raw[module] = deps
+        raw[module] = deps
+        for dep in deps:
+            if dep in core_all or dep in provided or dep in requested:
+                continue
+            entry = (catalog or {}).get(dep)
+            if entry is not None and entry.repo not in ("local", f"{owner}/{name}"):
+                continue  # the whitelist catalog explains this one
+            if github.fetch_module_manifest(owner, name, branch, dep) is not None:
+                same_repo_seen.add(dep)  # sibling living in the same repo
+            elif report.core_verified:
+                candidates.add(dep)  # probe this one across the OCA org
+
+    # second pass: discover provider repos for everything unexplained
+    if candidates:
+        report.providers = discover_providers(github=github, deps=sorted(candidates), branch=branch)
+
+    for _module, deps in raw.items():
         for dep in deps:
             if dep in core_all:
                 report.core.add(dep)
             elif dep in provided:
                 report.available.add(dep)
-            elif dep in report.requested or dep in report.same_repo:
-                report.same_repo.append(dep)
+            elif dep in requested or dep in same_repo_seen:
+                if dep not in report.same_repo:
+                    report.same_repo.append(dep)
             else:
                 entry = (catalog or {}).get(dep)
                 if entry is not None and entry.repo not in ("local", f"{owner}/{name}"):
                     if (dep, entry.repo) not in report.other_repo:
                         report.other_repo.append((dep, entry.repo))
-                elif github.fetch_module_manifest(owner, name, branch, dep) is not None:
-                    if dep not in report.same_repo:
-                        report.same_repo.append(dep)  # sibling living in the same repo
+                elif dep in report.providers:
+                    repo_full, _deps = report.providers[dep]
+                    if (dep, repo_full) not in report.other_repo:
+                        report.other_repo.append((dep, repo_full))
                 elif dep not in report.unknown:
                     report.unknown.append(dep)
     return report
@@ -165,6 +193,7 @@ class ModulePlan:
     container_path: str
     modules: list[str] = field(default_factory=list)
     steps: list[Step] = field(default_factory=list)
+    dep_report: ModuleDepReport | None = None
 
 
 def split_repo(repo: str) -> tuple[str, str]:
@@ -447,6 +476,39 @@ def _compose_config_ok(docker: DockerLike, stack_dir: Path) -> bool:
         return False
 
 
+def discover_providers(
+    *,
+    github: GitHubLike,
+    deps: Iterable[str],
+    branch: str = ODOO_VERSION,
+    org: str = OCA_ORG,
+) -> dict[str, tuple[str, list[str]]]:
+    """Discover which org repo provides each dependency by probing raw manifests.
+
+    Iterative: the deps of a found module join the next probe round, so transitive
+    cross-repo chains (A needs B from another repo, B needs C from yet another)
+    resolve in one call. A name probed and not found anywhere is never probed
+    again and simply stays absent from the result — the caller treats it as
+    unknown/unresolved. Network failures raise GitHubError (fail fast); the
+    callers probe only when the core listing succeeded, so a degraded plan is
+    never blocked by probing.
+    """
+    found: dict[str, tuple[str, list[str]]] = {}
+    probed: set[str] = set()
+    pending = sorted(set(deps))
+    while pending:
+        fresh = [name for name in pending if name not in probed]
+        if not fresh:
+            break
+        probed.update(fresh)
+        for module, repo_full in github.find_module_repos(fresh, branch, org=org).items():
+            owner, repo_name = repo_full.split("/", 1)
+            text = github.fetch_module_manifest(owner, repo_name, branch, module)
+            found[module] = (repo_full, parse_manifest_deps(text) if text is not None else [])
+        pending = sorted({dep for _r, manifest_deps in found.values() for dep in manifest_deps})
+    return found
+
+
 @dataclass
 class DepResolution:
     """Result of dependency resolution for a planned install/upgrade."""
@@ -454,11 +516,14 @@ class DepResolution:
     to_install: list[str] = field(default_factory=list)  # targets + resolved OCA deps
     to_mount: list[tuple[str, str, list[str]]] = field(default_factory=list)
     # ^ (repo_full, branch, dep_modules) — repos the resolver would mount
+    to_extend: list[tuple[str, list[str]]] = field(default_factory=list)
+    # ^ (repo_full, dep_modules) — repos ALREADY mounted as sparse clones that must
+    # extend their visible module set to include the dep
     unresolved: list[str] = field(default_factory=list)  # neither core, mounted, nor catalog
 
     @property
     def needs_mount(self) -> bool:
-        return bool(self.to_mount)
+        return bool(self.to_mount) or bool(self.to_extend)
 
 
 def resolve_dependencies(
@@ -468,6 +533,8 @@ def resolve_dependencies(
     docker: DockerLike,
     targets: list[str],
     catalog: dict[str, TestedModule],
+    github: GitHubLike | None = None,
+    providers: dict[str, tuple[str, list[str]]] | None = None,
 ) -> DepResolution:
     """Resolve OCA dependencies of `targets` against core, mounts and the catalog.
 
@@ -477,6 +544,9 @@ def resolve_dependencies(
       and its own manifest deps are walked further;
     - a dependency provided by an UNMOUNTED repo per the central catalog
       (tested.toml entries carry repo + branch + deps) is reported in `to_mount`;
+    - with `github` given, anything the catalog cannot explain is probed across the
+      OCA org's repos (raw manifests) and resolved the same way (`providers` carries
+      pre-probed results, e.g. from the dep report, so probing is not repeated);
     - anything else is `unresolved` (the caller refuses or lets Odoo fail naturally).
     """
     core = list_core_addons(docker, manifest)
@@ -491,6 +561,8 @@ def resolve_dependencies(
     resolution = DepResolution(to_install=list(targets))
     queue = list(targets)
     seen: set[str] = set()
+    probed: set[str] = set()
+    known_providers = dict(providers or {})
     while queue:
         name = queue.pop(0)
         if name in seen:
@@ -501,10 +573,27 @@ def resolve_dependencies(
             continue
         entry = catalog.get(name)
         if entry is None or entry.repo == "local":
-            resolution.unresolved.append(name)
-            continue
+            hit = known_providers.get(name)
+            if hit is None and github is not None and name not in probed:
+                probed.add(name)
+                known_providers.update(
+                    discover_providers(github=github, deps=[name], branch=ODOO_VERSION)
+                )
+                hit = known_providers.get(name)
+            if hit is not None:
+                repo_full, manifest_deps = hit
+                entry = TestedModule(
+                    name=name, repo=repo_full, branch=ODOO_VERSION, deps=manifest_deps
+                )
+            else:
+                resolution.unresolved.append(name)
+                continue
         if entry.repo not in mounted:
             resolution.to_mount.append((entry.repo, entry.branch, [name]))
+        elif name not in provided:
+            # the repo is already mounted, but (as a sparse clone) it does not
+            # carry this module — its sparse set must be extended
+            resolution.to_extend.append((entry.repo, [name]))
         for dep in entry.deps:
             queue.append(dep)
         if name not in resolution.to_install:
@@ -554,6 +643,7 @@ def module_add_plan(
     fs: FileSystemLike,
     docker: DockerLike,
     catalog: dict[str, TestedModule] | None = None,
+    recreate: bool = True,
 ) -> ModulePlan:
     owner, name = split_repo(repo_arg)
     full = f"{owner}/{name}"
@@ -794,9 +884,9 @@ def module_add_plan(
 
     steps.append(Step(description=f"record {full} in {MANIFEST_NAME}", run=record))
 
-    if not manifest.adopted:
+    if recreate and not manifest.adopted:
 
-        def recreate() -> str:
+        def recreate_web() -> str:
             if not state["changed"]:
                 return "skipped (nothing changed)"
             # a plain `restart` reuses the old container and would NOT mount the new
@@ -807,7 +897,7 @@ def module_add_plan(
             Step(
                 description=f"recreate web service {manifest.web_service!r} "
                 "(docker compose up -d) to mount the repo and apply the new addons_path",
-                run=recreate,
+                run=recreate_web,
             )
         )
 
@@ -819,7 +909,116 @@ def module_add_plan(
         host_path=host_path,
         container_path=container_path,
         steps=steps,
+        dep_report=dep_report,
     )
+
+
+@dataclass
+class DepProvision:
+    """One cross-repo dependency provider to clone/mount BEFORE the main add."""
+
+    plan: ModulePlan
+    provides: list[str]  # dep modules this provider supplies
+
+
+@dataclass
+class AddPlanSet:
+    """A `module add` plan plus the dependency-provider plans it needs first."""
+
+    main: ModulePlan
+    dep_provisions: list[DepProvision] = field(default_factory=list)
+
+
+def module_add_plan_set(
+    *,
+    config: GlobalConfig,
+    manifest: InstanceManifest,
+    repo_arg: str,
+    modules_opt: list[str] | None,
+    sparse: bool,
+    fork: str | None,
+    existing_repo: Path | None,
+    github: GitHubLike,
+    git: GitLike,
+    fs: FileSystemLike,
+    docker: DockerLike,
+    catalog: dict[str, TestedModule] | None = None,
+    resolve_deps: bool = True,
+) -> AddPlanSet:
+    """`module add` with automatic cross-repo dependency provisioning.
+
+    The main plan is built first (its dep report probes provider repos when the
+    whitelist catalog cannot explain a dependency). Every dependency that lives
+    in ANOTHER repo — resolved transitively via catalog + probing — gets its own
+    sparse `module add` plan, marked to NOT recreate the web service; the main
+    plan's final recreate then applies every new mount in one go. Order matters:
+    the caller must apply the dep plans before the main plan. `resolve_deps=False`
+    skips the provisioning entirely (--no-resolve-deps).
+    """
+    main = module_add_plan(
+        config=config,
+        manifest=manifest,
+        repo_arg=repo_arg,
+        modules_opt=modules_opt,
+        sparse=sparse,
+        fork=fork,
+        existing_repo=existing_repo,
+        github=github,
+        git=git,
+        fs=fs,
+        docker=docker,
+        catalog=catalog,
+    )
+    dep_provisions: list[DepProvision] = []
+    report = main.dep_report
+    if modules_opt and resolve_deps and report is not None and report.core_verified:
+        targets = sorted(set(report.unknown) | {dep for dep, _repo in report.other_repo})
+        if targets:
+            resolution = resolve_dependencies(
+                fs=fs,
+                manifest=manifest,
+                docker=docker,
+                targets=targets,
+                catalog=catalog or {},
+                github=github,
+                providers=report.providers,
+            )
+            if resolution.unresolved:
+                raise StackError(
+                    "unresolvable dependencies (not core, not mounted, not in the "
+                    f"whitelist catalog, not found in OCA repos): "
+                    f"{', '.join(resolution.unresolved)} — try 'module search' to find "
+                    "the providing repo, or pass --no-resolve-deps to add the repo "
+                    "without dependency provisioning"
+                )
+            grouped: dict[str, list[str]] = {}
+            for repo_full, _branch, dep_modules in resolution.to_mount:
+                if repo_full == main.repo:
+                    continue  # the main plan sparse-clones its own siblings
+                grouped.setdefault(repo_full, []).extend(dep_modules)
+            for repo_full, dep_modules in resolution.to_extend:
+                if repo_full == main.repo:
+                    continue
+                grouped.setdefault(repo_full, []).extend(dep_modules)
+            for repo_full, dep_modules in grouped.items():
+                dep_modules = sorted(set(dep_modules))
+                dep_plan = module_add_plan(
+                    config=config,
+                    manifest=manifest,
+                    repo_arg=repo_full,
+                    modules_opt=dep_modules,
+                    sparse=True,
+                    fork=None,
+                    existing_repo=None,
+                    github=github,
+                    git=git,
+                    fs=fs,
+                    docker=docker,
+                    catalog=catalog,
+                    recreate=False,
+                )
+                dep_provisions.append(DepProvision(plan=dep_plan, provides=dep_modules))
+    return AddPlanSet(main=main, dep_provisions=dep_provisions)
 
 
 def module_remove_plan(

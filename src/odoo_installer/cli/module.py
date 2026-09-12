@@ -34,6 +34,7 @@ from odoo_installer.core.dbms import execute_sql, module_states
 from odoo_installer.core.modules import (
     available_modules,
     module_add_plan,
+    module_add_plan_set,
     module_manifest_deps,
     module_remove_plan,
     resolve_dependencies,
@@ -83,14 +84,28 @@ def add(
             help="Explicit confirmation for file edits on ADOPTED stacks (required there).",
         ),
     ] = False,
+    resolve_deps: Annotated[
+        bool,
+        typer.Option(
+            "--resolve-deps/--no-resolve-deps",
+            help="Download and mount cross-repo dependency providers automatically "
+            "(discovered via the whitelist catalog and OCA raw-manifest probing).",
+        ),
+    ] = True,
     apply_changes: Annotated[bool, typer.Option("--apply", help=_APPLY_HELP)] = False,
 ) -> None:
-    """Add an OCA repo: verify the 19.0 branch, clone/mount, extend addons_path."""
+    """Add an OCA repo: verify the 19.0 branch, clone/mount, extend addons_path.
+
+    Cross-repo dependencies (e.g. account_financial_report needs date_range from
+    OCA/server-ux) are discovered and provisioned automatically: their provider
+    repos are cloned at the 19.0 branch into the instance's repos dir, mounted and
+    recorded before the main repo. Disable with --no-resolve-deps.
+    """
     container = deps.build()
     module_names = [m.strip() for m in modules_opt.split(",") if m.strip()] if modules_opt else None
     try:
         manifest = resolve_instance(container, instance)
-        plan = module_add_plan(
+        plan_set = module_add_plan_set(
             config=container.config,
             manifest=manifest,
             repo_arg=repo,
@@ -103,7 +118,9 @@ def add(
             fs=container.fs,
             docker=container.docker,
             catalog=load_tested_registry(container.tested_path).modules,
+            resolve_deps=resolve_deps,
         )
+        plan = plan_set.main
     except OdooInstallerError as exc:
         error(str(exc))
         raise typer.Exit(code=1) from None
@@ -113,6 +130,14 @@ def add(
     )
     if not apply_changes:
         render_plan(plan.steps, f"Module add plan: {plan.repo}")
+        for provision in plan_set.dep_provisions:
+            dep_plan = provision.plan
+            render_plan(
+                dep_plan.steps,
+                f"Dependency plan: {dep_plan.repo} (provides {', '.join(provision.provides)})",
+                footer=False,
+            )
+        console.print("[dim]dry run — re-run with --apply to execute[/dim]")
         return
     if manifest.adopted and not yes:
         console.print(
@@ -121,6 +146,12 @@ def add(
         )
         return
     try:
+        for provision in plan_set.dep_provisions:
+            console.print(
+                f"[bold]resolving dependency[/bold] {provision.plan.repo} "
+                f"(provides {', '.join(provision.provides)})"
+            )
+            apply_steps(provision.plan.steps, on_step=progress_reporter())
         apply_steps(plan.steps, on_step=progress_reporter())
     except OdooInstallerError as exc:
         error(str(exc))
@@ -247,12 +278,14 @@ def _run_modules(
                 docker=container.docker,
                 targets=modules,
                 catalog=catalog,
+                github=container.github,
             )
             if resolution.unresolved:
                 raise OdooInstallerError(
                     "unresolvable dependencies (not core, not mounted, not in the "
-                    f"whitelist catalog): {', '.join(resolution.unresolved)} — try "
-                    "'module search' to find the providing repo"
+                    f"whitelist catalog, not found in OCA repos): "
+                    f"{', '.join(resolution.unresolved)} — try 'module search' to find "
+                    "the providing repo"
                 )
             for repo_full, branch, dep_modules in resolution.to_mount:
                 add_plan = module_add_plan(
@@ -270,6 +303,26 @@ def _run_modules(
                 )
                 console.print(
                     f"[bold]resolving dependency[/bold] {repo_full} @ {branch} "
+                    f"(provides {', '.join(dep_modules)})"
+                )
+                apply_steps(add_plan.steps, on_step=progress_reporter())
+                manifest = resolve_instance(container, instance)
+            for repo_full, dep_modules in resolution.to_extend:
+                add_plan = module_add_plan(
+                    config=container.config,
+                    manifest=manifest,
+                    repo_arg=repo_full,
+                    modules_opt=dep_modules,
+                    sparse=True,
+                    fork=None,
+                    existing_repo=None,
+                    github=container.github,
+                    git=container.git,
+                    fs=container.fs,
+                    docker=container.docker,
+                )
+                console.print(
+                    f"[bold]extending mounted repo[/bold] {repo_full} "
                     f"(provides {', '.join(dep_modules)})"
                 )
                 apply_steps(add_plan.steps, on_step=progress_reporter())
