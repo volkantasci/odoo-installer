@@ -255,6 +255,7 @@ açıktır; `postgres`/`template0`/`template1` reddedilir; `drop`/`reset` için
 ```bash
 oii module add <oca-repo> [--modules m1,m2] [--sparse] [--repo YOL]
                          [--fork KULLANICI] [--instance AD] [--yes] [--apply]
+                         [--resolve-deps/--no-resolve-deps]
 ```
 
 - Argüman bir **repo**'dur (`web`, `OCA/server-tools`) — modül adı değil. 19.0 dalı
@@ -273,10 +274,26 @@ oii module add <oca-repo> [--modules m1,m2] [--sparse] [--repo YOL]
   - **core** — çalışan konteynerin core addons dizini listelenerek doğrulanır;
   - **same-repo** — aynı repodaki kardeş modüller; otomatik olarak sparse klona
     katılırlar, sonraki kurulum "module not found" ile düşemez;
-  - **other-repo** — sağlayıcı repo planda yazar; `install --resolve-deps` tarafından
-    mount edilir;
+  - **other-repo** — sağlayıcı repo planda yazar; otomatik provision edilir (aşağıda);
   - **already available** — local addons veya başka bir mount'lu repo tarafından
     sağlanıyor.
+- **Çapraz-repo bağımlılıklar otomatik provision edilir.** Önce whitelist kataloğuna
+  (tested.toml) bakılır; orada açıklanamayan bağımlılık, OCA org'unun repolarında
+  taranarak (raw manifest'ler, geçişli) bulunur. Her sağlayıcı repo, 19.0 dalında
+  instance'ın repos dizinine sparse klonlanır, mount edilir ve kaydedilir — ana
+  repodan ÖNCE — ve web servisi en sonda TEK SEFERDE yeniden yaratılır:
+
+  ```console
+  $ oii module add account-financial-report --modules account_financial_report
+  Module add plan: OCA/account-financial-report
+     ...
+  Dependency plan: OCA/server-ux (provides date_range)
+     ...
+  Dependency plan: OCA/reporting-engine (provides report_xlsx)
+     ...
+  ```
+- `--no-resolve-deps` sağlayıcı provision'unu atlar (repo olduğu gibi eklenir;
+  karşılanmayan bağımlılık sonraki kurulumda ipucuyla düşer).
 - `--sparse` **blob-filtreli kısmi klon** yapar
   (`git clone --filter=blob:none --sparse --depth 1`) — yalnızca istenen modüller
   iner.
@@ -317,8 +334,11 @@ her hedefin `__manifest__.py`'sini okur:
 - **Odoo core**'un (web konteynerinin core addons listesiyle doğrulanır) veya
   **mount'lu repoların** sağladığı bağımlılıklar sorunsuz geçer;
 - sağlayıcı reposu **mount edilmemiş** bir bağımlılık, sağlayıcı adıyla reddedilir —
-  `--resolve-deps` ekleyin; sağlayıcı repolar otomatik mount edilir (whitelist
-  kataloğundan) ve bağımlılıklar kurulum listesine eklenir;
+  `--resolve-deps` ekleyin; sağlayıcı repolar otomatik mount edilir (önce whitelist
+  kataloğu, sonra OCA genelinde raw manifest taraması) ve bağımlılıklar kurulum
+  listesine eklenir;
+- mount'lu SPARSE bir klonun dosyalarında olmayan bağımlılık, sparse setin
+  genişletilmesiyle otomatik karşılanır;
 - bilinmeyen sağlayıcılar dürüstçe raporlanır, `module search` ipucu verilir.
 
 #### Kaldırma

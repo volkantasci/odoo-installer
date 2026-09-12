@@ -42,8 +42,8 @@ def render_checks(checks: Sequence[CheckResult]) -> None:
     )
 
 
-def render_plan(steps: Sequence[Step], title: str) -> None:
-    """Render a plan for dry-run inspection."""
+def render_plan(steps: Sequence[Step], title: str, footer: bool = True) -> None:
+    """Render a plan for dry-run inspection; `footer=False` hides the dry-run note."""
     console.print(f"[bold]{title}[/bold]")
     for index, step in enumerate(steps, start=1):
         if step.already_satisfied:
@@ -52,7 +52,8 @@ def render_plan(steps: Sequence[Step], title: str) -> None:
             )
         else:
             console.print(f"  {index:2d}. [cyan]→[/cyan] {step.description}")
-    console.print("[dim]dry run — re-run with --apply to execute[/dim]")
+    if footer:
+        console.print("[dim]dry run — re-run with --apply to execute[/dim]")
 
 
 def progress_reporter() -> Callable[[int, int, Step, str | None], None]:

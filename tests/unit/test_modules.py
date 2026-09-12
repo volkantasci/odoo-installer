@@ -15,8 +15,10 @@ from odoo_installer.core.modules import (
     conf_addons_edit,
     conf_addons_remove,
     discover_modules,
+    discover_providers,
     find_odoo_conf_host_path,
     module_add_plan,
+    module_add_plan_set,
     module_remove_plan,
     split_repo,
 )
@@ -603,3 +605,197 @@ def test_module_add_plan_second_sparse_add_extends_visible_set(tmp_path: Path) -
     manifest = load_manifest(fs, make_manifest(tmp_path).dir)
     record = next(r for r in manifest.repos if r.repo == "OCA/web")
     assert sorted(record.modules) == ["web_dark_mode", "web_responsive"]
+
+
+# --- cross-repo dependency provisioning ---------------------------------------
+
+CORE_LISTING = "base\naccount\nweb\nmail\nbus"
+
+AFR_MANIFEST = '{"depends": ["base", "account", "date_range", "report_xlsx"]}'
+
+
+def _afr_github(**extra) -> FakeGitHub:
+    """Repo-aware manifests: account_financial_report with cross-repo deps."""
+    return FakeGitHub(
+        module_manifests={
+            "OCA/account-financial-report/account_financial_report": AFR_MANIFEST,
+            "OCA/server-ux/date_range": '{"depends": ["base", "mail"]}',
+            "OCA/reporting-engine/report_xlsx": '{"depends": ["base", "web"]}',
+        },
+        org_modules={
+            "date_range": "OCA/server-ux",
+            "report_xlsx": "OCA/reporting-engine",
+        },
+        **extra,
+    )
+
+
+def test_discover_providers_finds_and_walks_transitively() -> None:
+    """date_range <- OCA/server-ux; its own external dep maps to another repo."""
+    github = FakeGitHub(
+        module_manifests={
+            "date_range": '{"depends": ["base", "partner_external_map"]}',
+            "partner_external_map": '{"depends": ["base"]}',
+        },
+        org_modules={
+            "date_range": "OCA/server-ux",
+            "partner_external_map": "OCA/partner-contact",
+        },
+    )
+    providers = discover_providers(github=github, deps=["date_range"], branch="19.0")
+    assert providers["date_range"] == ("OCA/server-ux", ["base", "partner_external_map"])
+    assert providers["partner_external_map"] == ("OCA/partner-contact", ["base"])
+    # base is never probed twice (deduped by the probed set)
+    assert [probe[0] for probe in github.module_repo_probes] == [
+        ("date_range",),
+        ("base", "partner_external_map"),
+    ]
+
+
+def test_discover_providers_misses_once_and_stops() -> None:
+    github = FakeGitHub(module_manifests={}, org_modules={})
+    providers = discover_providers(github=github, deps=["ghost_dep"], branch="19.0")
+    assert providers == {}
+    assert len(github.module_repo_probes) == 1  # probed exactly once, then stopped
+
+
+def test_add_plan_set_provisions_cross_repo_deps(tmp_path: Path) -> None:
+    """account_financial_report needs date_range (OCA/server-ux) and report_xlsx
+    (OCA/reporting-engine): the plan set must carry a sparse add plan per provider."""
+    plan_set = module_add_plan_set(
+        config=make_config(tmp_path),
+        manifest=make_manifest(tmp_path),
+        repo_arg="account-financial-report",
+        modules_opt=["account_financial_report"],
+        sparse=True,
+        fork=None,
+        existing_repo=None,
+        github=_afr_github(),
+        git=FakeGit(sample_modules=("account_financial_report",)),
+        fs=FakeFs(),
+        docker=FakeDocker(compose_results=[CORE_LISTING] * 4),
+    )
+    assert [(p.plan.name, p.provides) for p in plan_set.dep_provisions] == [
+        ("server-ux", ["date_range"]),
+        ("reporting-engine", ["report_xlsx"]),
+    ]
+    for provision in plan_set.dep_provisions:
+        assert all("recreate" not in s.description for s in provision.plan.steps)
+    assert any("recreate" in s.description for s in plan_set.main.steps)
+    # the dep report SHOWS the discovered providers instead of "unknown"
+    assert "date_range <- OCA/server-ux" in plan_set.main.dep_report.step_description
+    assert "report_xlsx <- OCA/reporting-engine" in plan_set.main.dep_report.step_description
+
+
+def test_add_plan_set_applies_deps_before_main(tmp_path: Path) -> None:
+    fs = FakeFs()
+    git = FakeGit(sample_modules=("account_financial_report",))
+    docker = FakeDocker(compose_results=[CORE_LISTING] * 4)
+    manifest_dir = make_manifest(tmp_path).dir
+    plan_set = module_add_plan_set(
+        config=make_config(tmp_path),
+        manifest=make_manifest(tmp_path),
+        repo_arg="account-financial-report",
+        modules_opt=["account_financial_report"],
+        sparse=True,
+        fork=None,
+        existing_repo=None,
+        github=_afr_github(),
+        git=git,
+        fs=fs,
+        docker=docker,
+    )
+    for provision in plan_set.dep_provisions:
+        apply_steps(provision.plan.steps)
+    apply_steps(plan_set.main.steps)
+    sparse_dirs = [dirs for _u, _p, dirs in git.sparse_cloned]
+    assert sparse_dirs == [
+        ["date_range"],
+        ["report_xlsx"],
+        ["account_financial_report"],
+    ]
+    manifest = load_manifest(fs, manifest_dir)
+    assert sorted(r.repo for r in manifest.repos) == [
+        "OCA/account-financial-report",
+        "OCA/reporting-engine",
+        "OCA/server-ux",
+    ]
+    compose = (manifest_dir / "docker-compose.yml").read_text(encoding="utf-8")
+    for short in ("server-ux", "reporting-engine", "account-financial-report"):
+        assert f"/mnt/oca/{short}" in compose
+    assert [args for args, _ in docker.compose_calls].count(("up", "-d", "web")) == 1
+
+
+def test_add_plan_set_extends_mounted_sparse_repo(tmp_path: Path) -> None:
+    """server-ux is already mounted (sparse, without date_range): the resolver must
+    EXTEND its sparse set instead of failing with 'unresolvable dependencies'."""
+    manifest = make_manifest(tmp_path)
+    host_path = manifest.dir / "repos" / "oca-server-ux"
+    host_path.mkdir(parents=True)
+    (host_path / "date_util_foo").mkdir()
+    (host_path / "date_util_foo" / "__manifest__.py").write_text("{}", encoding="utf-8")
+    manifest.repos = [
+        RepoRecord(
+            repo="OCA/server-ux",
+            url="https://github.com/OCA/server-ux.git",
+            branch="19.0",
+            commit="abc1234",
+            host_path=host_path,
+            container_path="/mnt/oca/server-ux",
+            modules=["date_util_foo"],
+            sparse=True,
+        )
+    ]
+    plan_set = module_add_plan_set(
+        config=make_config(tmp_path),
+        manifest=manifest,
+        repo_arg="account-financial-report",
+        modules_opt=["account_financial_report"],
+        sparse=True,
+        fork=None,
+        existing_repo=None,
+        github=FakeGitHub(
+            module_manifests={
+                "OCA/account-financial-report/account_financial_report": (
+                    '{"depends": ["base", "account", "date_range"]}'
+                ),
+                "OCA/server-ux/date_range": '{"depends": ["base", "mail"]}',
+            },
+            org_modules={"date_range": "OCA/server-ux"},
+        ),
+        git=FakeGit(
+            existing={host_path},
+            remote="https://github.com/OCA/server-ux.git",
+            sample_modules=("account_financial_report",),
+        ),
+        fs=FakeFs(),
+        docker=FakeDocker(compose_results=[CORE_LISTING] * 3),
+    )
+    assert [(p.plan.name, p.provides) for p in plan_set.dep_provisions] == [
+        ("server-ux", ["date_range"])
+    ]
+    apply_steps(plan_set.dep_provisions[0].plan.steps)
+    # the mounted sparse clone extended its cone to include date_range
+    assert (host_path / "date_range" / "__manifest__.py").exists()
+    assert (host_path / "date_util_foo" / "__manifest__.py").exists()
+
+
+def test_add_plan_set_unresolved_raises_with_hint(tmp_path: Path) -> None:
+    github = FakeGitHub(
+        module_manifests={"OCA/account-financial-report/account_financial_report": AFR_MANIFEST},
+        org_modules={},  # probing finds nothing
+    )
+    with pytest.raises(StackError, match="--no-resolve-deps"):
+        module_add_plan_set(
+            config=make_config(tmp_path),
+            manifest=make_manifest(tmp_path),
+            repo_arg="account-financial-report",
+            modules_opt=["account_financial_report"],
+            sparse=True,
+            fork=None,
+            existing_repo=None,
+            github=github,
+            git=FakeGit(sample_modules=("account_financial_report",)),
+            fs=FakeFs(),
+            docker=FakeDocker(compose_results=[CORE_LISTING] * 2),
+        )

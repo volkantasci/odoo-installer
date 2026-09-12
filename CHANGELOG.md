@@ -5,6 +5,30 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] - 2026-09-12
+
+### Added
+
+- **Automatic cross-repo dependency provisioning in `module add`:** dependencies that
+  live in a DIFFERENT OCA repo (e.g. `account_financial_report` needs `date_range`
+  from OCA/server-ux and `report_xlsx` from OCA/reporting-engine) are discovered and
+  provisioned automatically — provider repos are sparse-cloned at the 19.0 branch into
+  the instance's repos dir, mounted, written to addons_path and recorded BEFORE the
+  main repo, and the web service is recreated once at the end. Disable with
+  `--no-resolve-deps`.
+- Provider discovery: the whitelist catalog (tested.toml) is asked first; anything it
+  cannot explain is probed across the OCA org's repos (org listing via the public API
+  once, then parallel raw-manifest probes — no API rate-limit cost per probe). The
+  walk is transitive, so a dep's own cross-repo deps are resolved in the same run.
+  Dry-run plans SHOW each discovered provider as a separate "Dependency plan".
+- An already-mounted sparse repo whose clone lacks a needed dep is now EXTENDED
+  (sparse set grows) by both `module add` and `module install --resolve-deps`
+  (`to_extend` resolution), instead of failing later with "module not found".
+- `module install --resolve-deps` now also falls back to OCA probing for deps the
+  whitelist catalog does not know.
+- Renamed OCA repos keep working: the branch check follows GitHub redirects
+  (e.g. `OCA/account-financial-report` → `OCA/account-financial-reporting`).
+
 ## [0.6.1] - 2026-09-12
 
 ### Fixed

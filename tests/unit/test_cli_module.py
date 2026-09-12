@@ -140,6 +140,97 @@ def test_module_add_bad_branch_fails(patch_deps, tmp_path: Path) -> None:
     assert "does not exist on OCA/server-utils" in result.output
 
 
+CROSS_REPO_MANIFESTS = {
+    "OCA/account-financial-report/account_financial_report": '{"depends": ["base", "date_range"]}',
+    "OCA/server-ux/date_range": '{"depends": ["base"]}',
+}
+
+
+def cross_repo_container(container: Container) -> Container:
+    container.github = FakeGitHub(  # type: ignore[assignment]
+        module_manifests=CROSS_REPO_MANIFESTS,
+        org_modules={"date_range": "OCA/server-ux"},
+    )
+    container.docker = FakeDocker(compose_results=["base\nweb\nmail\nbus"] * 3)
+    return container
+
+
+def test_module_add_dry_run_shows_dependency_plans(patch_deps, tmp_path: Path) -> None:
+    container, manifest = prepared_instance(tmp_path, patch_deps)
+    cross_repo_container(container)
+    result = runner.invoke(
+        app,
+        ["module", "add", "account-financial-report", "--modules", "account_financial_report"],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Dependency plan: OCA/server-ux (provides date_range)" in result.output
+    assert "verify dependencies of account_financial_report" in result.output
+    assert "date_range <- OCA/server-ux" in result.output
+    compose = (manifest.dir / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "/mnt/oca/server-ux" not in compose  # dry run touched nothing
+
+
+def test_module_add_apply_provisions_cross_repo_deps(patch_deps, tmp_path: Path) -> None:
+    container, manifest = prepared_instance(tmp_path, patch_deps)
+    cross_repo_container(container)
+    container.git = FakeGit(sample_modules=("account_financial_report",))  # type: ignore[assignment]
+    result = runner.invoke(
+        app,
+        [
+            "module",
+            "add",
+            "account-financial-report",
+            "--modules",
+            "account_financial_report",
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "resolving dependency OCA/server-ux" in result.output
+    sparse_dirs = [dirs for _u, _p, dirs in container.git.sparse_cloned]
+    assert sparse_dirs == [["date_range"]]  # dep provision is sparse
+    cloned = [p for _u, p in container.git.cloned]
+    assert cloned == [manifest.dir / "repos" / "oca-account-financial-report"]
+    loaded = InstanceManifest.model_validate_json(
+        (manifest.dir / ".odoo-installer.json").read_text(encoding="utf-8")
+    )
+    assert sorted(r.repo for r in loaded.repos) == [
+        "OCA/account-financial-report",
+        "OCA/server-ux",
+    ]
+    compose = (manifest.dir / "docker-compose.yml").read_text(encoding="utf-8")
+    for short in ("server-ux", "account-financial-report"):
+        assert f"/mnt/oca/{short}" in compose
+    assert [args for args, _ in container.docker.compose_calls].count(("up", "-d", "web")) == 1
+
+
+def test_module_add_no_resolve_deps_skips_provisioning(patch_deps, tmp_path: Path) -> None:
+    container, manifest = prepared_instance(tmp_path, patch_deps)
+    cross_repo_container(container)
+    container.git = FakeGit(sample_modules=("account_financial_report",))  # type: ignore[assignment]
+    result = runner.invoke(
+        app,
+        [
+            "module",
+            "add",
+            "account-financial-report",
+            "--modules",
+            "account_financial_report",
+            "--no-resolve-deps",
+            "--apply",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Dependency plan" not in result.output
+    assert container.git.sparse_cloned == []  # no provisioning without the flag
+    cloned = [p for _u, p in container.git.cloned]
+    assert cloned == [manifest.dir / "repos" / "oca-account-financial-report"]
+    loaded = InstanceManifest.model_validate_json(
+        (manifest.dir / ".odoo-installer.json").read_text(encoding="utf-8")
+    )
+    assert [r.repo for r in loaded.repos] == ["OCA/account-financial-report"]
+
+
 def test_module_search_renders_results(patch_deps, tmp_path: Path) -> None:
     from odoo_installer.schemas import RepoSummary
 

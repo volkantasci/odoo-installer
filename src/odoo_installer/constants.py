@@ -8,6 +8,9 @@ from __future__ import annotations
 
 APP_NAME = "odoo-installer"
 
+# OCA owner used for dependency-provider probing (D2: Odoo 19.0 + OCA ecosystem).
+OCA_ORG = "OCA"
+
 # Approved decision D2: Odoo 19.0 only.
 ODOO_VERSION = "19.0"
 DEFAULT_ODOO_IMAGE = f"odoo:{ODOO_VERSION}"

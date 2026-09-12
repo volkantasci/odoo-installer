@@ -25,7 +25,7 @@ Locked in with the project owner before implementation:
 | D7 | Safety | System-changing and destructive commands are **plan-first**: without `--apply` / `--yes` they print exactly what they would do and exit 0. Idempotent re-runs are a requirement. |
 | D8 | Git access | Plain `git` via `subprocess` (no GitPython). GitHub metadata via **httpx**. |
 | D9 | Whitelist distribution | The installable-addons whitelist (`tested.toml`) can be mirrored in a dedicated git repo (`tested_repo_url` config key); `test pull` merges it into the local whitelist — union by module name, newer `tested_at` wins. New approvals spread to every machine without CLI updates. |
-| D10 | Dependency resolution | Manifest-driven: `depends` is read from `__manifest__.py` (GitHub raw at plan-build time, disk at apply time). Core deps are verified by listing the web container's core addons dir — never guessed. Same-repo siblings join the sparse clone; missing provider repos mount only with explicit `--resolve-deps`, resolved via the whitelist catalog. |
+| D10 | Dependency resolution | Manifest-driven: `depends` is read from `__manifest__.py` (GitHub raw at plan-build time, disk at apply time). Core deps are verified by listing the web container's core addons dir — never guessed. Same-repo siblings join the sparse clone; cross-repo provider repos are resolved via the whitelist catalog and, as a fallback, by probing raw manifests across the OCA org, and are provisioned automatically by `module add` (cloned at 19.0 into the instance's repos dir, mounted, recorded; `--no-resolve-deps` disables this). |
 
 ### Non-goals for v1
 
@@ -322,9 +322,15 @@ The tool must behave exactly like the documented OCA workflow:
    disk at apply time) and every dependency is classified: **Odoo core** (verified by
    listing the web container's core addons dir — never guessed), **same-repo sibling**
    (joins the sparse clone so the install cannot fail with "module not found"),
-   **other-repo** (provider resolved from the whitelist catalog and shown in the plan;
-   mounted only by `module install --resolve-deps`), **already available** (mounted or
-   local). Unknown providers are reported honestly — never guessed.
+   **other-repo** (provider resolved from the whitelist catalog, else discovered by
+   probing each org repo's raw manifests for the dep's `__manifest__.py`), and
+   **already available** (mounted or local). `module add` provisions cross-repo
+   providers automatically: their repos are sparse-cloned at the 19.0 branch into the
+   instance's repos dir, mounted and recorded BEFORE the main repo, with a single
+   final web-service recreate (`--no-resolve-deps` disables). An already-mounted
+   sparse provider repo is EXTENDED to include the dep instead of failing.
+   Unresolvable providers (not core, not mounted, not cataloged, not found in the
+   org) abort with guidance — never guessed.
 
 ---
 
