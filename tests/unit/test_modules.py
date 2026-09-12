@@ -17,6 +17,7 @@ from odoo_installer.core.modules import (
     discover_modules,
     discover_providers,
     find_odoo_conf_host_path,
+    late_dep_provisions,
     module_add_plan,
     module_add_plan_set,
     module_remove_plan,
@@ -799,3 +800,108 @@ def test_add_plan_set_unresolved_raises_with_hint(tmp_path: Path) -> None:
             fs=FakeFs(),
             docker=FakeDocker(compose_results=[CORE_LISTING] * 2),
         )
+
+
+# --- 0.6.3 robustness: container-offline probing + whole-repo late provisioning
+
+
+def test_dep_report_probes_even_when_container_is_offline(tmp_path: Path) -> None:
+    """Cross-repo discovery must not depend on a running web container."""
+    docker = FakeDocker(compose_results=[""])  # core listing unavailable
+    github = FakeGitHub(
+        module_manifests={
+            "OCA/account-financial-report/account_financial_report": AFR_MANIFEST,
+        },
+        org_modules={"date_range": "OCA/server-ux", "report_xlsx": "OCA/reporting-engine"},
+    )
+    plan = module_add_plan(
+        config=make_config(tmp_path),
+        manifest=make_manifest(tmp_path),
+        repo_arg="account-financial-report",
+        modules_opt=["account_financial_report"],
+        sparse=False,
+        fork=None,
+        existing_repo=None,
+        github=github,
+        git=FakeGit(sample_modules=("account_financial_report",)),
+        fs=FakeFs(),
+        docker=docker,
+    )
+    assert "date_range <- OCA/server-ux" in plan.dep_report.step_description
+    assert "report_xlsx <- OCA/reporting-engine" in plan.dep_report.step_description
+
+
+def test_add_plan_set_container_offline_provisions_resolved_tolerates_rest(tmp_path: Path) -> None:
+    """With the container down, resolved providers are still provisioned and only
+    the unexplainable names are tolerated as `unresolved` (no hard abort)."""
+    github = _afr_github()
+    plan_set = module_add_plan_set(
+        config=make_config(tmp_path),
+        manifest=make_manifest(tmp_path),
+        repo_arg="account-financial-report",
+        modules_opt=["account_financial_report"],
+        sparse=True,
+        fork=None,
+        existing_repo=None,
+        github=github,
+        git=FakeGit(sample_modules=("account_financial_report",)),
+        fs=FakeFs(),
+        docker=FakeDocker(compose_results=[""] * 4),
+    )
+    assert plan_set.core_verified is False
+    assert [(p.plan.name, p.provides) for p in plan_set.dep_provisions] == [
+        ("server-ux", ["date_range"]),
+        ("reporting-engine", ["report_xlsx"]),
+    ]
+    assert plan_set.unresolved == ["account", "base", "mail", "web"]  # probed, not found
+
+
+def test_whole_repo_add_defers_provisioning_to_late_phase(tmp_path: Path) -> None:
+    """A whole-repo add cannot know deps before the clone: the main plan must NOT
+    recreate, and `late_dep_provisions` resolves providers from the fresh clone."""
+    fs = FakeFs()
+    manifest = make_manifest(tmp_path)
+    host_path = manifest.dir / "repos" / "oca-account-financial-report"
+    host_path.mkdir(parents=True)
+    module_dir = host_path / "account_financial_report"
+    module_dir.mkdir()
+    (module_dir / "__manifest__.py").write_text(AFR_MANIFEST, encoding="utf-8")
+    github = _afr_github()
+    plan_set = module_add_plan_set(
+        config=make_config(tmp_path),
+        manifest=manifest,
+        repo_arg="account-financial-report",
+        modules_opt=None,  # whole-repo add
+        sparse=False,
+        fork=None,
+        existing_repo=None,
+        github=github,
+        git=FakeGit(
+            existing={host_path},
+            remote="https://github.com/OCA/account-financial-report.git",
+        ),
+        fs=fs,
+        docker=FakeDocker(compose_results=[CORE_LISTING] * 3),
+    )
+    assert plan_set.late_provision is True
+    assert plan_set.dep_provisions == []
+    assert not any("recreate" in s.description for s in plan_set.main.steps)
+    apply_steps(plan_set.main.steps)  # mount + record, no recreate
+    loaded = load_manifest(fs, manifest.dir)
+    assert [r.repo for r in loaded.repos] == ["OCA/account-financial-report"]
+    late = late_dep_provisions(
+        config=make_config(tmp_path),
+        manifest=loaded,
+        fs=fs,
+        docker=FakeDocker(compose_results=[CORE_LISTING]),
+        github=github,
+        git=FakeGit(existing={host_path}),
+        host_path=host_path,
+        catalog={},
+    )
+    assert [(p.plan.name, p.provides) for p in late.provisions] == [
+        ("server-ux", ["date_range"]),
+        ("reporting-engine", ["report_xlsx"]),
+    ]
+    assert late.unresolved == []
+    assert late.core_verified is True

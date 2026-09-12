@@ -33,10 +33,12 @@ from odoo_installer.console import (
 from odoo_installer.core.dbms import execute_sql, module_states
 from odoo_installer.core.modules import (
     available_modules,
+    late_dep_provisions,
     module_add_plan,
     module_add_plan_set,
     module_manifest_deps,
     module_remove_plan,
+    recreate_web_service,
     resolve_dependencies,
 )
 from odoo_installer.core.plan import apply_steps
@@ -137,6 +139,20 @@ def add(
                 f"Dependency plan: {dep_plan.repo} (provides {', '.join(provision.provides)})",
                 footer=False,
             )
+            console.print(
+                "[dim]     (mount only — goes live together with the main repo's recreate)[/dim]"
+            )
+        if plan_set.late_provision:
+            console.print(
+                "[dim]whole-repo add: cross-repo dependency providers are resolved "
+                "from the clone right after it is placed (at apply time)[/dim]"
+            )
+        if plan_set.unresolved and not plan_set.core_verified:
+            console.print(
+                f"[yellow]container offline: could not verify dependencies "
+                f"{', '.join(plan_set.unresolved)} — Odoo re-checks them at install "
+                "time; cross-repo providers found by probing are still provisioned[/yellow]"
+            )
         console.print("[dim]dry run — re-run with --apply to execute[/dim]")
         return
     if manifest.adopted and not yes:
@@ -153,6 +169,44 @@ def add(
             )
             apply_steps(provision.plan.steps, on_step=progress_reporter())
         apply_steps(plan.steps, on_step=progress_reporter())
+        if plan_set.late_provision:
+            manifest = resolve_instance(container, instance)
+            try:
+                late = late_dep_provisions(
+                    config=container.config,
+                    manifest=manifest,
+                    fs=container.fs,
+                    docker=container.docker,
+                    github=container.github,
+                    git=container.git,
+                    host_path=plan.host_path,
+                    catalog=load_tested_registry(container.tested_path).modules,
+                )
+            except OdooInstallerError as exc:
+                console.print(
+                    f"[yellow]could not resolve cross-repo dependencies "
+                    f"({exc}); the repo itself is mounted and recorded[/yellow]"
+                )
+                late = None
+            if late is not None:
+                if late.unresolved:
+                    scope = (
+                        "Odoo re-checks them at install time"
+                        if not late.core_verified
+                        else "their installs will fail with guidance"
+                    )
+                    console.print(
+                        f"[yellow]unresolved dependencies for whole-repo add: "
+                        f"{', '.join(late.unresolved)} — {scope}[/yellow]"
+                    )
+                for provision in late.provisions:
+                    console.print(
+                        f"[bold]resolving dependency[/bold] {provision.plan.repo} "
+                        f"(provides {', '.join(provision.provides)})"
+                    )
+                    apply_steps(provision.plan.steps, on_step=progress_reporter())
+            if not manifest.adopted:
+                console.print(recreate_web_service(container.docker, manifest))
     except OdooInstallerError as exc:
         error(str(exc))
         raise typer.Exit(code=1) from None

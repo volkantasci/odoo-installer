@@ -92,7 +92,11 @@ class ModuleDepReport:
                 else "unknown provider"
             )
             parts.append(f"{label}: {self._shorten(self.unknown)}")
-        head = f"verify dependencies of {', '.join(self.requested)}"
+        head = (
+            f"verify dependencies of {', '.join(self.requested)}"
+            if self.requested
+            else "verify dependencies (whole repo)"
+        )
         return f"{head} ({'; '.join(parts)})" if parts else f"{head} (no dependencies found)"
 
     @property
@@ -153,7 +157,7 @@ def _resolve_requested_module_deps(
                 continue  # the whitelist catalog explains this one
             if github.fetch_module_manifest(owner, name, branch, dep) is not None:
                 same_repo_seen.add(dep)  # sibling living in the same repo
-            elif report.core_verified:
+            else:
                 candidates.add(dep)  # probe this one across the OCA org
 
     # second pass: discover provider repos for everything unexplained
@@ -514,6 +518,7 @@ class DepResolution:
     """Result of dependency resolution for a planned install/upgrade."""
 
     to_install: list[str] = field(default_factory=list)  # targets + resolved OCA deps
+    core_verified: bool = False  # web container listed its core addons successfully
     to_mount: list[tuple[str, str, list[str]]] = field(default_factory=list)
     # ^ (repo_full, branch, dep_modules) — repos the resolver would mount
     to_extend: list[tuple[str, list[str]]] = field(default_factory=list)
@@ -558,7 +563,7 @@ def resolve_dependencies(
         provided.setdefault(module, "local")
     mounted = {r.repo for r in manifest.repos}
 
-    resolution = DepResolution(to_install=list(targets))
+    resolution = DepResolution(to_install=list(targets), core_verified=bool(core))
     queue = list(targets)
     seen: set[str] = set()
     probed: set[str] = set()
@@ -889,9 +894,7 @@ def module_add_plan(
         def recreate_web() -> str:
             if not state["changed"]:
                 return "skipped (nothing changed)"
-            # a plain `restart` reuses the old container and would NOT mount the new
-            # volume; `up -d` recreates the service because its config changed
-            return docker.compose(["up", "-d", manifest.web_service], manifest.dir) or "recreated"
+            return recreate_web_service(docker, manifest)
 
         steps.append(
             Step(
@@ -922,11 +925,82 @@ class DepProvision:
 
 
 @dataclass
+class LateProvision:
+    """Cross-repo providers resolved AFTER a whole-repo add (from the fresh clone)."""
+
+    provisions: list[DepProvision] = field(default_factory=list)
+    unresolved: list[str] = field(default_factory=list)
+    core_verified: bool = False
+
+
+@dataclass
 class AddPlanSet:
     """A `module add` plan plus the dependency-provider plans it needs first."""
 
     main: ModulePlan
     dep_provisions: list[DepProvision] = field(default_factory=list)
+    unresolved: list[str] = field(default_factory=list)  # deps nobody could explain
+    core_verified: bool = False  # web container listing succeeded at plan time
+    late_provision: bool = False
+    # ^ whole-repo add (no --modules): providers cannot be known before the clone;
+    # the caller must run `late_dep_provisions` right after applying the main plan
+
+
+def recreate_web_service(docker: DockerLike, manifest: InstanceManifest) -> str:
+    """Recreate the web service so new mounts/addons_path entries go live.
+
+    A plain `restart` reuses the old container and would NOT mount the new
+    volume; `up -d` recreates the service because its config changed.
+    """
+    return docker.compose(["up", "-d", manifest.web_service], manifest.dir) or "recreated"
+
+
+def _provisions_from_resolution(
+    *,
+    config: GlobalConfig,
+    manifest: InstanceManifest,
+    fs: FileSystemLike,
+    github: GitHubLike,
+    git: GitLike,
+    docker: DockerLike,
+    catalog: dict[str, TestedModule] | None,
+    to_mount: list[tuple[str, str, list[str]]],
+    to_extend: list[tuple[str, list[str]]],
+    main_repo: str | None = None,
+) -> list[DepProvision]:
+    """Turn a resolution's mount/extend lists into sparse add plans for providers.
+
+    `main_repo` entries are skipped (the main plan sparse-clones its own siblings).
+    """
+    grouped: dict[str, list[str]] = {}
+    for repo_full, _branch, dep_modules in to_mount:
+        if main_repo is not None and repo_full == main_repo:
+            continue
+        grouped.setdefault(repo_full, []).extend(dep_modules)
+    for repo_full, dep_modules in to_extend:
+        if main_repo is not None and repo_full == main_repo:
+            continue
+        grouped.setdefault(repo_full, []).extend(dep_modules)
+    provisions: list[DepProvision] = []
+    for repo_full, dep_modules in grouped.items():
+        dep_modules = sorted(set(dep_modules))
+        dep_plan = module_add_plan(
+            config=config,
+            manifest=manifest,
+            repo_arg=repo_full,
+            modules_opt=dep_modules,
+            sparse=True,
+            fork=None,
+            existing_repo=None,
+            github=github,
+            git=git,
+            fs=fs,
+            docker=docker,
+            catalog=catalog,
+            recreate=False,
+        )
+        provisions.append(DepProvision(plan=dep_plan, provides=dep_modules))
+    return provisions
 
 
 def module_add_plan_set(
@@ -947,14 +1021,21 @@ def module_add_plan_set(
 ) -> AddPlanSet:
     """`module add` with automatic cross-repo dependency provisioning.
 
-    The main plan is built first (its dep report probes provider repos when the
-    whitelist catalog cannot explain a dependency). Every dependency that lives
-    in ANOTHER repo — resolved transitively via catalog + probing — gets its own
-    sparse `module add` plan, marked to NOT recreate the web service; the main
+    Module-based adds (`--modules m1,...`): the main plan is built first (its dep
+    report probes provider repos whenever the whitelist catalog cannot explain a
+    dependency — no running container needed). Every dependency that lives in
+    ANOTHER repo gets its own sparse `module add` plan (no recreate); the main
     plan's final recreate then applies every new mount in one go. Order matters:
-    the caller must apply the dep plans before the main plan. `resolve_deps=False`
-    skips the provisioning entirely (--no-resolve-deps).
+    the caller must apply the dep plans before the main plan. A dep nobody can
+    explain aborts when the core listing succeeded, and is tolerated (with the
+    caller warning) when the container is offline.
+
+    Whole-repo adds (no --modules): the module set is unknown before the clone, so
+    providers cannot be planned upfront — the main plan does NOT recreate, and the
+    caller must run `late_dep_provisions` right after applying it, then recreate
+    once (`late_provision=True`).
     """
+    whole_repo = modules_opt is None
     main = module_add_plan(
         config=config,
         manifest=manifest,
@@ -968,10 +1049,14 @@ def module_add_plan_set(
         fs=fs,
         docker=docker,
         catalog=catalog,
+        recreate=not whole_repo,
     )
     dep_provisions: list[DepProvision] = []
+    unresolved: list[str] = []
+    core_verified = False
     report = main.dep_report
-    if modules_opt and resolve_deps and report is not None and report.core_verified:
+    if modules_opt and resolve_deps and report is not None:
+        core_verified = report.core_verified
         targets = sorted(set(report.unknown) | {dep for dep, _repo in report.other_repo})
         if targets:
             resolution = resolve_dependencies(
@@ -983,7 +1068,7 @@ def module_add_plan_set(
                 github=github,
                 providers=report.providers,
             )
-            if resolution.unresolved:
+            if resolution.unresolved and resolution.core_verified:
                 raise StackError(
                     "unresolvable dependencies (not core, not mounted, not in the "
                     f"whitelist catalog, not found in OCA repos): "
@@ -991,34 +1076,73 @@ def module_add_plan_set(
                     "the providing repo, or pass --no-resolve-deps to add the repo "
                     "without dependency provisioning"
                 )
-            grouped: dict[str, list[str]] = {}
-            for repo_full, _branch, dep_modules in resolution.to_mount:
-                if repo_full == main.repo:
-                    continue  # the main plan sparse-clones its own siblings
-                grouped.setdefault(repo_full, []).extend(dep_modules)
-            for repo_full, dep_modules in resolution.to_extend:
-                if repo_full == main.repo:
-                    continue
-                grouped.setdefault(repo_full, []).extend(dep_modules)
-            for repo_full, dep_modules in grouped.items():
-                dep_modules = sorted(set(dep_modules))
-                dep_plan = module_add_plan(
-                    config=config,
-                    manifest=manifest,
-                    repo_arg=repo_full,
-                    modules_opt=dep_modules,
-                    sparse=True,
-                    fork=None,
-                    existing_repo=None,
-                    github=github,
-                    git=git,
-                    fs=fs,
-                    docker=docker,
-                    catalog=catalog,
-                    recreate=False,
-                )
-                dep_provisions.append(DepProvision(plan=dep_plan, provides=dep_modules))
-    return AddPlanSet(main=main, dep_provisions=dep_provisions)
+            unresolved = resolution.unresolved
+            dep_provisions = _provisions_from_resolution(
+                config=config,
+                manifest=manifest,
+                fs=fs,
+                github=github,
+                git=git,
+                docker=docker,
+                catalog=catalog,
+                to_mount=resolution.to_mount,
+                to_extend=resolution.to_extend,
+                main_repo=main.repo,
+            )
+    return AddPlanSet(
+        main=main,
+        dep_provisions=dep_provisions,
+        unresolved=unresolved,
+        core_verified=core_verified,
+        late_provision=whole_repo and resolve_deps,
+    )
+
+
+def late_dep_provisions(
+    *,
+    config: GlobalConfig,
+    manifest: InstanceManifest,
+    fs: FileSystemLike,
+    docker: DockerLike,
+    github: GitHubLike,
+    git: GitLike,
+    host_path: Path,
+    catalog: dict[str, TestedModule] | None,
+) -> LateProvision:
+    """Resolve cross-repo providers from a FRESH whole-repo clone (after the add).
+
+    Every module discovered in `host_path` becomes a resolution target; the clone
+    is already mounted and recorded, so its modules count as provided and their
+    disk manifests are walked transitively. Runs WITHOUT needing the web
+    container: core is verified only when the container is up; probe misses while
+    it is offline are tolerated (`unresolved`) instead of aborting the bulk add.
+    """
+    targets = discover_modules(fs, host_path)
+    if not targets:
+        return LateProvision()
+    resolution = resolve_dependencies(
+        fs=fs,
+        manifest=manifest,
+        docker=docker,
+        targets=targets,
+        catalog=catalog or {},
+        github=github,
+    )
+    return LateProvision(
+        provisions=_provisions_from_resolution(
+            config=config,
+            manifest=manifest,
+            fs=fs,
+            github=github,
+            git=git,
+            docker=docker,
+            catalog=catalog,
+            to_mount=resolution.to_mount,
+            to_extend=resolution.to_extend,
+        ),
+        unresolved=resolution.unresolved,
+        core_verified=resolution.core_verified,
+    )
 
 
 def module_remove_plan(

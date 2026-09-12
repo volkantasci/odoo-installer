@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] - 2026-09-12
+
+### Fixed
+
+- **Whole-repo adds now provision cross-repo dependencies too.** `oii module add
+  <repo>` without `--modules` previously reported "no external dependencies — 0
+  unmet" while `date_range`/`report_xlsx`-style providers were actually missing.
+  The module set is only known after the clone, so provisioning is now deferred to
+  a late phase: right after the repo is placed, every discovered module's
+  cross-repo deps are re-resolved (catalog + probing), their provider repos are
+  sparse-cloned at 19.0 and mounted, and the web service is recreated once.
+  Unresolvable names in the bulk path are warnings, not aborts.
+- Dependency probing no longer requires a running web container: when the core
+  listing is unavailable, cross-repo providers are still discovered and
+  provisioned; only the unexplainable names are tolerated with a loud warning
+  (module-based adds still abort on unexplainable deps when the container IS up).
+- Dry-run "Dependency plan" sections now state that the mount goes live together
+  with the main repo's single recreate (the dep plans intentionally do not
+  recreate).
+
 ## [0.6.2] - 2026-09-12
 
 ### Added
