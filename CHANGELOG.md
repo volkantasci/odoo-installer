@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- The `module add` dependency step no longer floods the plan with every Odoo core
+  addon (~600 lines): `core` now lists only the actual core dependencies of the
+  requested modules, long buckets are truncated to the first 8 names with a
+  `… (+N more)` tail, and the post-run summary counts only non-empty buckets
+  (including the previously missing `available` count).
+
 ## [0.4.0] - 2026-09-01
 
 ### Added

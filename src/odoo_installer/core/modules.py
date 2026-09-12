@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import contextlib
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -42,11 +42,12 @@ CONTAINER_MOUNT_PREFIX = "/mnt/oca"
 class ModuleDepReport:
     """Dependency classification of the requested modules (shown in the plan).
 
-    Buckets: `core` (verified from the web container when it is up; `core_verified`
-    tells whether that listing succeeded), `same_repo` (siblings that MUST join the
-    sparse clone), `other_repo` (dep, provider-repo — mounted later by
-    `module install --resolve-deps`), `available` (already provided by the instance),
-    `unknown` (provider cannot be determined).
+    Buckets hold only the ACTUAL dependencies of the requested modules, never the
+    full core listing: `core` (deps the web container's core addons provide;
+    `core_verified` tells whether that listing succeeded), `same_repo` (siblings
+    that MUST join the sparse clone), `other_repo` (dep, provider-repo — mounted
+    later by `module install --resolve-deps`), `available` (already provided by the
+    instance), `unknown` (provider cannot be determined).
     """
 
     requested: list[str]
@@ -58,40 +59,50 @@ class ModuleDepReport:
     unknown: list[str] = field(default_factory=list)
     raw: dict[str, list[str]] = field(default_factory=dict)
 
+    @staticmethod
+    def _shorten(names: Iterable[str], limit: int = 8) -> str:
+        """Sorted names on one line; a `… (+N more)` tail keeps long lists readable."""
+        ordered = sorted(names)
+        if len(ordered) <= limit:
+            return ", ".join(ordered)
+        return ", ".join(ordered[:limit]) + f" … (+{len(ordered) - limit} more)"
+
     @property
     def step_description(self) -> str:
         parts: list[str] = []
         if self.core:
-            parts.append(f"core: {', '.join(sorted(self.core))}")
+            parts.append(f"core: {self._shorten(self.core)}")
         if self.same_repo:
-            parts.append(f"same-repo: {', '.join(sorted(self.same_repo))}")
+            parts.append(f"same-repo: {self._shorten(self.same_repo)}")
         if self.other_repo:
             parts.append(
                 "other repos (mounted by install --resolve-deps): "
-                + ", ".join(f"{dep} <- {repo}" for dep, repo in sorted(self.other_repo))
+                + self._shorten(f"{dep} <- {repo}" for dep, repo in sorted(self.other_repo))
             )
         if self.available:
-            parts.append(f"already available: {', '.join(sorted(self.available))}")
+            parts.append(f"already available: {self._shorten(self.available)}")
         if self.unknown:
             label = (
                 "core or unknown (container offline)"
                 if not self.core_verified
                 else "unknown provider"
             )
-            parts.append(f"{label}: {', '.join(sorted(self.unknown))}")
+            parts.append(f"{label}: {self._shorten(self.unknown)}")
         head = f"verify dependencies of {', '.join(self.requested)}"
         return f"{head} ({'; '.join(parts)})" if parts else f"{head} (no dependencies found)"
 
     @property
     def summary(self) -> str:
-        bits = [
-            f"{len(self.core)} core",
-            f"{len(self.same_repo)} same-repo",
-            f"{len(self.other_repo)} other-repo",
-        ]
-        if self.unknown:
-            bits.append(f"{len(self.unknown)} unknown")
-        return "dependencies: " + ", ".join(bits) + " — 0 unmet"
+        counts = {
+            "core": len(self.core),
+            "same-repo": len(self.same_repo),
+            "other-repo": len(self.other_repo),
+            "available": len(self.available),
+            "unknown": len(self.unknown),
+        }
+        bits = [f"{count} {label}" for label, count in counts.items() if count]
+        body = ", ".join(bits) if bits else "no external dependencies"
+        return f"dependencies: {body} — 0 unmet"
 
 
 def _resolve_requested_module_deps(
@@ -111,9 +122,8 @@ def _resolve_requested_module_deps(
     if not modules_opt:
         return report  # whole-repo add: everything ships with the clone
 
-    core = list_core_addons(docker, manifest)
-    report.core = set(core)
-    report.core_verified = bool(core)
+    core_all = list_core_addons(docker, manifest)
+    report.core_verified = bool(core_all)
 
     provided: set[str] = set()
     for record in manifest.repos:
@@ -126,7 +136,7 @@ def _resolve_requested_module_deps(
         deps = parse_manifest_deps(text) if text is not None else []
         report.raw[module] = deps
         for dep in deps:
-            if dep in core:
+            if dep in core_all:
                 report.core.add(dep)
             elif dep in provided:
                 report.available.add(dep)
@@ -135,10 +145,12 @@ def _resolve_requested_module_deps(
             else:
                 entry = (catalog or {}).get(dep)
                 if entry is not None and entry.repo not in ("local", f"{owner}/{name}"):
-                    report.other_repo.append((dep, entry.repo))
+                    if (dep, entry.repo) not in report.other_repo:
+                        report.other_repo.append((dep, entry.repo))
                 elif github.fetch_module_manifest(owner, name, branch, dep) is not None:
-                    report.same_repo.append(dep)  # sibling living in the same repo
-                else:
+                    if dep not in report.same_repo:
+                        report.same_repo.append(dep)  # sibling living in the same repo
+                elif dep not in report.unknown:
                     report.unknown.append(dep)
     return report
 
