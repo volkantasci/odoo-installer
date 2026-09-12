@@ -9,6 +9,7 @@ from fakes import FakeDocker, FakeFs, FakeGit, FakeGitHub
 
 from odoo_installer.core.instances import load_manifest
 from odoo_installer.core.modules import (
+    ModuleDepReport,
     compose_volume_edit,
     compose_volume_remove,
     conf_addons_edit,
@@ -389,6 +390,67 @@ def test_module_add_plan_existing_repo_wrong_branch_fails(tmp_path: Path) -> Non
             fs=fs,
             docker=FakeDocker(),
         )
+
+
+# --- dependency report display -----------------------------------------------
+
+
+def _dep_add_plan(tmp_path: Path, *, github: FakeGitHub, docker: FakeDocker):
+    return module_add_plan(
+        config=make_config(tmp_path),
+        manifest=make_manifest(tmp_path),
+        repo_arg="server-utils",
+        modules_opt=["server_util_foo"],
+        sparse=False,
+        fork=None,
+        existing_repo=None,
+        github=github,
+        git=FakeGit(sample_modules=("server_util_foo",)),
+        fs=FakeFs(),
+        docker=docker,
+    )
+
+
+def test_dep_report_lists_only_actual_core_deps(tmp_path: Path) -> None:
+    """Regression: the plan must show the requested modules' core DEPS only —
+    never every addon the Odoo core ships (the 600-line flood)."""
+    docker = FakeDocker(compose_results=["base\nweb\nmail\nweb_tour\npartner_external_map"])
+    github = FakeGitHub(
+        module_manifests={
+            "server_util_foo": '{"depends": ["base", "mail", "partner_external_map"]}',
+        }
+    )
+    plan = _dep_add_plan(tmp_path, github=github, docker=docker)
+    dep_step = next(s for s in plan.steps if "verify dependencies" in s.description)
+    assert "core: base, mail, partner_external_map" in dep_step.description
+    assert "web_tour" not in dep_step.description  # core addon that is NOT a dep
+
+
+def test_dep_report_truncates_long_buckets(tmp_path: Path) -> None:
+    deps = [f"dep_{i:02d}" for i in range(1, 13)]
+    manifest = '{ "depends": ["base", "web", ' + ", ".join(f'"{d}"' for d in deps) + "] }"
+    docker = FakeDocker(compose_results=["base\nweb\n" + "\n".join(deps)])
+    github = FakeGitHub(module_manifests={"server_util_foo": manifest})
+    plan = _dep_add_plan(tmp_path, github=github, docker=docker)
+    dep_step = next(s for s in plan.steps if "verify dependencies" in s.description)
+    assert "dep_07 … (+6 more)" in dep_step.description
+    assert "dep_08" not in dep_step.description
+
+
+def test_dep_report_summary_drops_zero_buckets() -> None:
+    report = ModuleDepReport(
+        requested=["m"],
+        core={"base", "web"},
+        core_verified=True,
+        same_repo=["sibling_helper"],
+        other_repo=[("ext_dep", "OCA/extra")],
+    )
+    assert report.summary == "dependencies: 2 core, 1 same-repo, 1 other-repo — 0 unmet"
+
+
+def test_dep_report_summary_empty_buckets() -> None:
+    report = ModuleDepReport(requested=["m"], core_verified=True)
+    assert report.summary == "dependencies: no external dependencies — 0 unmet"
 
 
 # --- remove plan -------------------------------------------------------------
