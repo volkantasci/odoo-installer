@@ -327,16 +327,22 @@ The tool must behave exactly like the documented OCA workflow:
    **already available** (mounted or local). `module add` provisions cross-repo
    providers automatically: their repos are sparse-cloned at the 19.0 branch into the
    instance's repos dir, mounted and recorded BEFORE the main repo, with a single
-   final web-service recreate (`--no-resolve-deps` disables). An already-mounted
-   sparse provider repo is EXTENDED to include the dep instead of failing.
-   Unresolvable providers (not core, not mounted, not cataloged, not found in the
-   org) abort with guidance when the core listing succeeded; when the container is
-   offline, probing still runs and only the unexplainable names are tolerated with a
-   warning. Whole-repo adds (`module add <repo>` without `--modules`) cannot know
-   their module set before the clone: the main plan defers provisioning to
-   `late_dep_provisions`, which re-resolves every discovered module's cross-repo
-   deps from the fresh clone right after it is placed (then recreates once);
-   unresolvable names there are warnings, not aborts (bulk semantics).
+   final web-service recreate (`--no-resolve-deps` disables). The dependency plans
+   and the main plan SHARE one changed-state dict, so the recreate fires whenever
+   ANY plan edited files — a new provider mount can never sit dead in compose.
+   An already-mounted sparse provider repo is EXTENDED to include the dep instead of
+   failing. Unresolvable providers (not core, not mounted, not cataloged, not found
+   in the org) abort with guidance when the core listing succeeded; when the
+   container is offline, probing still runs and only the unexplainable names are
+   tolerated with a warning. Whole-repo adds (`module add <repo>` without
+   `--modules`) cannot know their module set before the clone: the main plan defers
+   provisioning to `late_dep_provisions`, which re-resolves every discovered
+   module's cross-repo deps from the fresh clone right after it is placed (then
+   recreates once); unresolvable names there are warnings, not aborts (bulk
+   semantics). `module install`/`upgrade` accept Odoo CORE modules the same way
+   (verified against the core listing, never whitelist-gated), and `module test
+   --with m1,m2` installs extra setup modules into the scratch DB before the test
+   run (accounting modules need a chart of accounts + journals to test their data).
 
 ---
 

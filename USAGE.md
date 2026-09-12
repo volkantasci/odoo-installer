@@ -347,6 +347,13 @@ reads each target's `__manifest__.py`:
   set automatically;
 - unknown providers are reported honestly with a `module search` hint.
 
+**Odoo core modules are accepted too** (`sale`, `account`, `sale`,
+...): they are verified against the web container's core addons listing (not the
+mounted repos) and are never gated by the whitelist. With the container down the
+verification is impossible and the command says so ("is the stack running?").
+
+Both list styles work: `module install a b c` and `module install a,b,c`.
+
 #### Remove
 
 ```bash
@@ -361,11 +368,20 @@ Unmounts, rewrites `addons_path`; `--db` resets the repo's modules to `uninstall
 
 ```bash
 oii module test <name> [--instance NAME] [--keep-db]
+                       [--with sale]
 ```
 
 Installs on a scratch DB, runs `--test-enable --test-tags=/<name>`, captures the log,
 parses failure kinds, prints PASS/FAIL (exit 3 on failure) and records PASSes in the
 whitelist.
+
+`--with m1,m2` installs the extra modules (core or OCA) in a SEPARATE setup stage
+on the scratch DB BEFORE the test stage — use it when the module's test data needs
+setup, e.g. `oii module test partner_statement --with sale` (Odoo 19 applies chart
+templates / journals only AFTER the module install loop, so a single combined
+`-i` run would run the module's tests before the journals exist — false FAILs).
+The executed tests are still scoped to `/<name>`; no visibility check runs on the
+extra modules, and a broken setup stage is reported as a FAIL with its log.
 
 #### Approve already-proven modules
 

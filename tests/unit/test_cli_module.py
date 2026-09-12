@@ -293,6 +293,123 @@ def test_module_add_container_offline_warns_but_provisions(patch_deps, tmp_path:
     assert "Dependency plan: OCA/server-ux (provides date_range)" in result.output
 
 
+# --- 0.6.4: core modules installable, --with test modules, comma lists --------
+
+
+def test_module_install_allows_core_modules(patch_deps, tmp_path: Path) -> None:
+    """Core modules (sale, account, ...) install without the whitelist gate —
+    they are verified against the web container's core addons listing instead."""
+    container, _ = prepared_instance(tmp_path, patch_deps)
+    container.docker = FakeDocker(
+        compose_results=["sale\naccount\nboard\n", "", "sale|installed\n"]
+    )
+    result = runner.invoke(
+        app, ["module", "install", "sale", "--db", "oitest_x", "--instance", "dev"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "installed" in result.output
+    assert "--allow-untested" not in result.output
+
+
+def test_module_install_core_needs_running_stack(patch_deps, tmp_path: Path) -> None:
+    container, _ = prepared_instance(tmp_path, patch_deps)
+    container.docker = FakeDocker(compose_results=[""])  # core listing unavailable
+    result = runner.invoke(
+        app, ["module", "install", "sale", "--db", "oitest_x", "--instance", "dev"]
+    )
+    assert result.exit_code == 1
+    assert "not visible" in result.output
+    assert "is the stack running?" in result.output
+
+
+def test_module_test_with_installs_extra_modules(patch_deps, tmp_path: Path) -> None:
+    """--with runs a SEPARATE setup stage first (plain install, no test flags):
+    Odoo 19 applies chart templates only after the install loop, so a single
+    combined -i run would run the module's tests before the journals exist."""
+    container, _ = prepared_instance(tmp_path, patch_deps)
+    add = runner.invoke(app, ["module", "add", "server-utils", "--apply"])
+    assert add.exit_code == 0, add.output
+    result = runner.invoke(
+        app,
+        [
+            "module",
+            "test",
+            "server_util_foo",
+            "--with",
+            "l10n_generic_coa,sale",
+            "--instance",
+            "dev",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "PASS" in result.output
+    odoo_calls = [
+        args
+        for args, _ in container.docker.compose_calls
+        if args[0] == "exec" and "odoo" in args and "--stop-after-init" in args
+    ]
+    setup_call, test_call = odoo_calls[-2], odoo_calls[-1]
+    assert setup_call[setup_call.index("-i") + 1] == "l10n_generic_coa,sale"
+    assert "--test-enable" not in setup_call  # plain setup stage
+    assert test_call[test_call.index("-i") + 1] == "server_util_foo"
+    assert "--test-enable" in test_call
+    assert "--test-tags=/server_util_foo" in test_call  # executed tests stay scoped
+
+
+def test_module_test_with_failing_setup_stage_fails(patch_deps, tmp_path: Path) -> None:
+    """A broken setup stage is reported as a FAIL (exit 3), not as a crash."""
+    container, _ = prepared_instance(tmp_path, patch_deps)
+    add = runner.invoke(app, ["module", "add", "server-utils", "--apply"])
+    assert add.exit_code == 0, add.output
+    container.docker.compose_result_results = [
+        (1, "ERROR: setup stage exploded\n"),
+        (0, ""),
+    ]
+    result = runner.invoke(
+        app,
+        [
+            "module",
+            "test",
+            "server_util_foo",
+            "--with",
+            "l10n_generic_coa",
+            "--instance",
+            "dev",
+        ],
+    )
+    assert result.exit_code == 3
+    assert "FAIL" in result.output
+    assert "setup stage exploded" in result.output
+
+
+def test_module_install_accepts_comma_lists(patch_deps, tmp_path: Path) -> None:
+    """install/upgrade accept `a,b` exactly like `add --modules` does."""
+    container, _ = prepared_instance(tmp_path, patch_deps)
+    runner.invoke(app, ["module", "add", "server-utils", "--apply"])
+    container.docker = FakeDocker(
+        compose_results=["sale\naccount\n", "", "sale|installed\nserver_util_foo|installed\n"]
+    )
+    result = runner.invoke(
+        app,
+        [
+            "module",
+            "install",
+            "server_util_foo,sale",
+            "--db",
+            "oitest_x",
+            "--instance",
+            "dev",
+            "--allow-untested",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    odoo_call = next(
+        args for args, _ in container.docker.compose_calls if args[0] == "exec" and "odoo" in args
+    )
+    assert odoo_call[odoo_call.index("-i") + 1] == "server_util_foo,sale"
+    assert "installed: server_util_foo, sale" in result.output
+
+
 def test_module_search_renders_results(patch_deps, tmp_path: Path) -> None:
     from odoo_installer.schemas import RepoSummary
 

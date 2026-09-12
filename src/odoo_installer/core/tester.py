@@ -118,14 +118,53 @@ def run_module_test(
     logs_dir: Path,
     module: str,
     *,
+    extra_modules: list[str] | None = None,
     timeout_s: int = 1800,
 ) -> TestOutcome:
     """Install `module` on a fresh scratch DB and run its tests. Never raises for
-    test failures — the outcome object carries the verdict."""
+    test failures — the outcome object carries the verdict.
+
+    `extra_modules` (e.g. `sale` for accounting modules) are installed in a
+    SEPARATE first stage (plain `--stop-after-init`, no test flags): Odoo 19
+    applies chart templates / journals only AFTER the module install loop, so a
+    single combined `-i` run would run the module's tests before the journals
+    exist (false FAILs: "No journal could be found"). The executed tests are
+    still scoped to `--test-tags /<module>`.
+    """
     db = scratch_db_name(module)
     _drop_scratch_db(docker, stack_dir, db_service, db_user, db)
 
     started = time.monotonic()
+    setup_output = ""
+    setup_exit = 0
+    if extra_modules:
+        setup_exit, setup_output = docker.compose_result(
+            [
+                "exec",
+                "-T",
+                web_service,
+                "odoo",
+                "-d",
+                db,
+                "-i",
+                ",".join(extra_modules),
+                "--stop-after-init",
+                f"--http-port={RUNNER_HTTP_PORT}",
+            ],
+            stack_dir,
+            timeout_s=timeout_s,
+        )
+        if setup_exit != 0:
+            return _outcome(
+                module=module,
+                db=db,
+                exit_code=setup_exit,
+                output=setup_output,
+                duration=time.monotonic() - started,
+                fs=fs,
+                logs_dir=logs_dir,
+            )
+
     exit_code, output = docker.compose_result(
         [
             "exec",
@@ -144,8 +183,28 @@ def run_module_test(
         stack_dir,
         timeout_s=timeout_s,
     )
-    duration = time.monotonic() - started
+    full_output = setup_output + output
+    return _outcome(
+        module=module,
+        db=db,
+        exit_code=exit_code,
+        output=full_output,
+        duration=time.monotonic() - started,
+        fs=fs,
+        logs_dir=logs_dir,
+    )
 
+
+def _outcome(
+    *,
+    module: str,
+    db: str,
+    exit_code: int,
+    output: str,
+    duration: float,
+    fs: FileSystemLike,
+    logs_dir: Path,
+) -> TestOutcome:
     failures = [
         match.group(0) for line in output.splitlines() if (match := _FAILURE_PATTERN.match(line))
     ]

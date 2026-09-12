@@ -34,6 +34,7 @@ from odoo_installer.core.dbms import execute_sql, module_states
 from odoo_installer.core.modules import (
     available_modules,
     late_dep_provisions,
+    list_core_addons,
     module_add_plan,
     module_add_plan_set,
     module_manifest_deps,
@@ -308,11 +309,19 @@ def _run_modules(
         manifest = resolve_instance(container, instance)
         available = available_modules(container.fs, manifest)
         missing = [m for m in modules if m not in available]
+        core: set[str] = set()
         if missing:
-            raise OdooInstallerError(
-                f"modules not visible to this instance: {', '.join(missing)}; "
-                "run 'module add' first"
-            )
+            # Odoo CORE modules (sale, account, ...) live in the image's own
+            # addons_path — verify them against the web container's core listing
+            # instead of refusing them like unknown OCA modules
+            core = list_core_addons(container.docker, manifest)
+            unexplained = [m for m in missing if m not in core]
+            if unexplained:
+                hint = "" if core else " (cannot verify Odoo core either — is the stack running?)"
+                raise OdooInstallerError(
+                    f"modules not visible to this instance: "
+                    f"{', '.join(unexplained)}; run 'module add' first{hint}"
+                )
 
         # dependency resolution: extend the module list with resolvable OCA deps and,
         # with --resolve-deps, mount the provider repos they live in
@@ -383,7 +392,12 @@ def _run_modules(
                 manifest = resolve_instance(container, instance)
             modules = resolution.to_install
 
-        untested = [m for m in modules if get_tested_module(m, path=container.tested_path) is None]
+        # the whitelist guards OCA addons only — Odoo core modules are always allowed
+        untested = [
+            m
+            for m in modules
+            if m not in core and get_tested_module(m, path=container.tested_path) is None
+        ]
         if untested and not allow_untested:
             raise OdooInstallerError(
                 "not tested yet: "
@@ -444,6 +458,14 @@ def _catalog_clash(
     return missing
 
 
+def _split_module_args(args: list[str]) -> list[str]:
+    """Accept BOTH list styles (`a b c` and `a,b,c`) the same way `--modules` does."""
+    parts: list[str] = []
+    for arg in args:
+        parts.extend(p.strip() for p in arg.split(",") if p.strip())
+    return list(dict.fromkeys(parts))
+
+
 @app.command("install")
 def install(
     modules: Annotated[list[str], typer.Argument(help="Module names.")],
@@ -468,7 +490,7 @@ def install(
 ) -> None:
     """Install modules into an explicit database (odoo -i, scratch DBs recommended)."""
     _run_modules(
-        modules,
+        _split_module_args(modules),
         db=db,
         instance=instance,
         upgrade=False,
@@ -501,7 +523,7 @@ def upgrade(
 ) -> None:
     """Upgrade modules in an explicit database (odoo -u)."""
     _run_modules(
-        modules,
+        _split_module_args(modules),
         db=db,
         instance=instance,
         upgrade=True,
@@ -568,6 +590,16 @@ def test(
     keep_db: Annotated[
         bool, typer.Option("--keep-db", help="Keep the scratch database for debugging.")
     ] = False,
+    with_modules: Annotated[
+        str | None,
+        typer.Option(
+            "--with",
+            help="Extra core/OCA modules installed into the scratch DB before the "
+            "test run (comma list, e.g. l10n_generic_coa,sale for accounting "
+            "modules needing a chart of accounts and journals). No visibility "
+            "check is run on them; Odoo reports anything unresolvable.",
+        ),
+    ] = None,
 ) -> None:
     """Test a module: install on a scratch DB, run its tests, record PASS.
 
@@ -582,6 +614,7 @@ def test(
             raise OdooInstallerError(
                 f"module {module!r} is not visible to this instance; run 'module add' first"
             )
+        extra = [p.strip() for p in with_modules.split(",") if p.strip()] if with_modules else None
         outcome = run_module_test(
             container.docker,
             manifest.dir,
@@ -591,6 +624,7 @@ def test(
             container.fs,
             instance_logs_dir(manifest),
             module,
+            extra_modules=extra,
         )
         if not keep_db:
             drop_scratch_db(
@@ -626,6 +660,7 @@ def approve(
     the production instance): the command refuses anything that is not in
     `installed` state in --db, then records the entries in tested.toml.
     """
+    modules = _split_module_args(modules)
     container = deps.build()
     try:
         manifest = resolve_instance(container, instance)

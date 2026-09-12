@@ -5,6 +5,36 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.4] - 2026-09-12
+
+### Added
+
+- **`module install`/`module upgrade` now accept Odoo CORE modules** (`sale`,
+  `account`, `l10n_generic_coa`, ...): visibility is verified against the web
+  container's core addons listing (with an honest "is the stack running?" error
+  when it is down), and the tested-addons whitelist does not gate core modules.
+  Scratch-DB scenarios like "chart of accounts + sale + OCA accounting module" now
+  work end to end.
+- **`module test --with sale`:** install extra core/OCA modules into the scratch DB
+  in a SEPARATE setup stage BEFORE the test stage — accounting modules whose test
+  data needs a chart of accounts / journals no longer fail for missing setup
+  (false FAILs). Verified live: `partner_statement` tests passed only this way —
+  Odoo 19 applies chart templates AFTER the module install loop, so a single
+  combined `-i` run runs the tests before the journals exist. A broken setup stage
+  is reported as a FAIL with its log; `--test-tags /<module>` still scopes the
+  EXECUTED tests to the module itself. (Note: `l10n_generic_coa` does not exist in
+  Odoo 19.0 — `account` brings the default chart itself.)
+
+### Fixed
+
+- **Recreate guarantee across dependency provisions:** the main plan's recreate now
+  shares its changed-state with the dependency plans, so a re-add whose ONLY change
+  is a new provider mount still recreates the web service (previously the new
+  mount could sit dead in compose until the next manual recreate).
+- **List format consistency:** `module install`/`upgrade`/`approve` accept both
+  `a b c` and `a,b,c` (previously a comma list was treated as ONE module name),
+  matching `module add --modules`.
+
 ## [0.6.3] - 2026-09-12
 
 ### Fixed

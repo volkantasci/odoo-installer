@@ -351,6 +351,13 @@ her hedefin `__manifest__.py`'sini okur:
   genişletilmesiyle otomatik karşılanır;
 - bilinmeyen sağlayıcılar dürüstçe raporlanır, `module search` ipucu verilir.
 
+**Odoo core modülleri de kabul edilir** (`sale`, `account`, `sale`,
+...): görünürlükleri mount'lu repolar yerine web konteynerinin core addons
+listesiyle doğrulanır ve whitelist ile engellenmezler. Konteyner kapalıyken bu
+doğrulama yapılamaz ve komut bunu açıkça söyler ("is the stack running?").
+
+İki liste biçimi de çalışır: `module install a b c` ve `module install a,b,c`.
+
 #### Kaldırma
 
 ```bash
@@ -366,11 +373,20 @@ sahip olduğu klonlar).
 
 ```bash
 oii module test <ad> [--instance AD] [--keep-db]
+                     [--with sale]
 ```
 
 Scratch DB'ye kurar, `--test-enable --test-tags=/<ad>` çalıştırır, logu yakalar,
 hata türlerini ayrıştırır, PASS/FAIL basar (başarısızlıkta 3 koduyla çıkar) ve
 PASS'leri whitelist'e kaydeder.
+
+`--with m1,m2` ek modülleri (core veya OCA) test aşamasından ÖNCE, scratch DB'de
+AYRI bir kurulum aşamasında kurar — modülün test verisi kurulum gerektiriyorsa
+kullanın: `oii module test partner_statement --with sale` (Odoo 19 grafik
+şablonlarını / journal'ları modül kurulum döngüsünden SONRA uygular; tek birleşik
+`-i` çalıştırması testleri journal'lar yokken koşar — sahte FAIL). Çalıştırılan
+testler yine `/<ad>` ile sınırlıdır; ek modüllere görünürlük kontrolü uygulanmaz ve
+bozuk kurulum aşaması FAIL olarak loguyla raporlanır.
 
 #### Zaten kanıtlanmış modülleri onaylama
 
