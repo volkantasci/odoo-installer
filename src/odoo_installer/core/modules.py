@@ -649,12 +649,17 @@ def module_add_plan(
     docker: DockerLike,
     catalog: dict[str, TestedModule] | None = None,
     recreate: bool = True,
+    state: dict[str, bool] | None = None,
 ) -> ModulePlan:
     owner, name = split_repo(repo_arg)
     full = f"{owner}/{name}"
     branch = ODOO_VERSION
     container_path = f"{CONTAINER_MOUNT_PREFIX}/{name}"
-    state = {"changed": False}
+    # a caller can share the changed-state dict across plans so the MAIN plan's
+    # recreate also fires when a DEPENDENCY plan edited files (e.g. a new provider
+    # mount while the main repo was already mounted — otherwise the new mount
+    # would silently stay dead until the next manual recreate)
+    state = state if state is not None else {"changed": False}
     steps: list[Step] = []
 
     # a different repo with the same short name would mount onto the same container
@@ -967,6 +972,7 @@ def _provisions_from_resolution(
     to_mount: list[tuple[str, str, list[str]]],
     to_extend: list[tuple[str, list[str]]],
     main_repo: str | None = None,
+    state: dict[str, bool] | None = None,
 ) -> list[DepProvision]:
     """Turn a resolution's mount/extend lists into sparse add plans for providers.
 
@@ -998,6 +1004,7 @@ def _provisions_from_resolution(
             docker=docker,
             catalog=catalog,
             recreate=False,
+            state=state,
         )
         provisions.append(DepProvision(plan=dep_plan, provides=dep_modules))
     return provisions
@@ -1036,6 +1043,10 @@ def module_add_plan_set(
     once (`late_provision=True`).
     """
     whole_repo = modules_opt is None
+    # dep plans and the main plan share one changed-state dict: the main plan's
+    # recreate must fire whenever ANY plan edited files, so a new provider mount
+    # can never sit dead in compose until the next manual recreate
+    shared_state: dict[str, bool] = {"changed": False}
     main = module_add_plan(
         config=config,
         manifest=manifest,
@@ -1050,6 +1061,7 @@ def module_add_plan_set(
         docker=docker,
         catalog=catalog,
         recreate=not whole_repo,
+        state=shared_state,
     )
     dep_provisions: list[DepProvision] = []
     unresolved: list[str] = []
@@ -1088,6 +1100,7 @@ def module_add_plan_set(
                 to_mount=resolution.to_mount,
                 to_extend=resolution.to_extend,
                 main_repo=main.repo,
+                state=shared_state,
             )
     return AddPlanSet(
         main=main,

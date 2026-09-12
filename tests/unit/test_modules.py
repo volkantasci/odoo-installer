@@ -905,3 +905,58 @@ def test_whole_repo_add_defers_provisioning_to_late_phase(tmp_path: Path) -> Non
     ]
     assert late.unresolved == []
     assert late.core_verified is True
+
+
+def test_main_recreate_fires_when_only_dep_provision_changed(tmp_path: Path) -> None:
+    """Regression (field report): a re-add whose ONLY change is a new provider
+    mount must still recreate the web service — otherwise the new mount sits dead
+    in compose until the next manual recreate."""
+    fs = FakeFs()
+    manifest = make_manifest(tmp_path)
+    host_path = manifest.dir / "repos" / "oca-web"
+    # OCA/web already mounted (sparse, web_responsive); the re-add requests
+    # web_dark_mode whose dep web_extra lives in an UNMOUNTED repo
+    (host_path / "web_responsive").mkdir(parents=True)
+    (host_path / "web_responsive" / "__manifest__.py").write_text("{}", encoding="utf-8")
+    (host_path / "web_dark_mode").mkdir()
+    (host_path / "web_dark_mode" / "__manifest__.py").write_text("{}", encoding="utf-8")
+    manifest.repos = [
+        RepoRecord(
+            repo="OCA/web",
+            url="https://github.com/OCA/web.git",
+            branch="19.0",
+            commit="abc1234",
+            host_path=host_path,
+            container_path="/mnt/oca/web",
+            modules=["web_responsive"],
+            sparse=True,
+        )
+    ]
+    docker = FakeDocker(compose_results=[CORE_LISTING] * 3)
+    github = FakeGitHub(
+        module_manifests={
+            "OCA/web/web_dark_mode": '{"depends": ["web", "web_extra"]}',
+        },
+        org_modules={"web_extra": "OCA/extra"},
+    )
+    plan_set = module_add_plan_set(
+        config=make_config(tmp_path),
+        manifest=manifest,
+        repo_arg="web",
+        modules_opt=["web_dark_mode"],
+        sparse=True,
+        fork=None,
+        existing_repo=None,
+        github=github,
+        git=FakeGit(existing={host_path}, remote="https://github.com/OCA/web.git"),
+        fs=fs,
+        docker=docker,
+    )
+    assert [(p.plan.name, p.provides) for p in plan_set.dep_provisions] == [
+        ("extra", ["web_extra"])
+    ]
+    for provision in plan_set.dep_provisions:
+        apply_steps(provision.plan.steps)  # mounts OCA/extra in compose
+    apply_steps(plan_set.main.steps)  # main repo itself is unchanged
+    # the shared changed-state makes the main plan's recreate fire anyway
+    assert [args for args, _ in docker.compose_calls].count(("up", "-d", "web")) == 1
