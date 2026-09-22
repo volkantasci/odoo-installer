@@ -297,6 +297,24 @@ def create_instance_plan(
     )
     steps.append(_registry_step(registry_path, name, stack_dir, http_port))
     steps.append(_manifest_step(fs, name, stack_dir, odoo_image, pg_tag, http_port, effective))
+    if manifest is None:
+        # a previous stack with this project name may have died mid-create or
+        # been deleted without `instance remove`: its containers/volumes linger
+        # and postgres NEVER re-initializes an existing data dir, so the old
+        # POSTGRES_PASSWORD would silently mismatch the freshly generated one.
+        # Nothing of value exists for a first-time create — sweep it.
+        steps.append(
+            Step(
+                description=(
+                    f"clear containers/volumes from any earlier '{name}' stack "
+                    "(compose down -v; postgres never re-inits an old data dir)"
+                ),
+                run=lambda: (
+                    docker.compose(["down", "-v", "--remove-orphans"], stack_dir, timeout_s=300)
+                    or "cleared"
+                ),
+            )
+        )
     steps.append(
         Step(
             description=f"start the stack (docker compose up -d, project {name!r})",

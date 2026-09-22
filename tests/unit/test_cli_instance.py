@@ -61,7 +61,12 @@ def test_create_apply_creates_and_starts_stack(patch_deps, tmp_path: Path) -> No
     assert result.exit_code == 0, result.output
     stack = tmp_path / "instances" / "dev"
     assert (stack / "docker-compose.yml").exists()
-    assert container.docker.compose_calls[0][0] == ("up", "-d")
+    assert container.docker.compose_calls[0][0] == (
+        "down",
+        "-v",
+        "--remove-orphans",
+    )  # leftover sweep first
+    assert container.docker.compose_calls[1][0] == ("up", "-d")
     assert container.docker.health_checks == ["dev-web-1"]
     assert "ready at http://localhost:8069" in result.output
     # live progress: every step is announced as [i/n] before it runs
@@ -87,7 +92,8 @@ def test_create_apply_reruns_are_idempotent(patch_deps, tmp_path: Path) -> None:
     assert second.exit_code == 0, second.output
     assert "8070" in second.output  # port must not drift to 8071 on re-run
     assert "already satisfied" in second.output
-    assert len(container.docker.compose_calls) == 2  # one up -d per run, nothing else
+    # run 1: leftover sweep (down -v) + up -d; run 2: up -d only — nothing else
+    assert len(container.docker.compose_calls) == 3
 
 
 def test_create_rejects_invalid_name(patch_deps, tmp_path: Path) -> None:
@@ -405,3 +411,22 @@ def test_logs_command_maps_to_compose(patch_deps, tmp_path: Path) -> None:
     result = runner.invoke(app, ["instance", "logs", "dev", "--tail", "20"])
     assert result.exit_code == 0, result.output
     assert container.docker.compose_calls[-1][0] == ("logs", "--tail", "20")
+
+
+def test_create_fresh_sweeps_leftovers_before_up(patch_deps, tmp_path: Path) -> None:
+    # a FIRST create must clear same-name leftovers (a stale pgdata volume
+    # would keep an old POSTGRES_PASSWORD: postgres never re-inits a data dir)
+    container = make_container(tmp_path)
+    patch_deps(container)
+    result = runner.invoke(app, ["instance", "create", "dev", "--apply"])
+    assert result.exit_code == 0, result.output
+    calls = [c[0] for c in container.docker.compose_calls]
+    assert ("down", "-v", "--remove-orphans") in calls
+    assert calls.index(("down", "-v", "--remove-orphans")) < next(
+        i for i, c in enumerate(calls) if c[:2] == ("up", "-d")
+    )
+    # re-runs (manifest exists) do NOT sweep again — down -v would destroy data
+    container.docker.compose_calls.clear()
+    rerun = runner.invoke(app, ["instance", "create", "dev", "--apply"])
+    assert rerun.exit_code == 0, rerun.output
+    assert not [c for c in container.docker.compose_calls if c[0][0] == "down"]

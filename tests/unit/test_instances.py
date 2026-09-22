@@ -126,7 +126,10 @@ def test_create_plan_apply_materializes_stack(tmp_path: Path) -> None:
     registry_entry = load_registry_entry(registry_path, "dev")
     assert registry_entry is not None
     assert registry_entry.http_port == 8069
-    assert docker.compose_calls == [(("up", "-d"), stack_dir)]
+    assert docker.compose_calls == [
+        (("down", "-v", "--remove-orphans"), stack_dir),  # leftover sweep (fresh create)
+        (("up", "-d"), stack_dir),
+    ]
     assert docker.health_checks == ["dev-web-1"]
 
 
