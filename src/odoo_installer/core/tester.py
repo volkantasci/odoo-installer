@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from odoo_installer.adapters.docker import DockerLike
+from odoo_installer.adapters.docker import ComposeLike
 from odoo_installer.adapters.filesystem import FileSystemLike
 from odoo_installer.constants import RUNNER_HTTP_PORT, SCRATCH_DB_PREFIX
 from odoo_installer.core.dbms import execute_sql
@@ -63,7 +63,7 @@ def scratch_db_name(module: str) -> str:
 
 
 def _drop_scratch_db(
-    docker: DockerLike, stack_dir: Path, db_service: str, db_user: str, db: str
+    docker: ComposeLike, stack_dir: Path, db_service: str, db_user: str, db: str
 ) -> None:
     exists = execute_sql(
         docker,
@@ -90,7 +90,7 @@ def _drop_scratch_db(
 
 
 def drop_scratch_db(
-    docker: DockerLike, stack_dir: Path, db_service: str, db_user: str, module: str
+    docker: ComposeLike, stack_dir: Path, db_service: str, db_user: str, module: str
 ) -> bool:
     """Drop the module's scratch database; returns True when it existed."""
     db = scratch_db_name(module)
@@ -109,7 +109,7 @@ def drop_scratch_db(
 
 
 def run_module_test(
-    docker: DockerLike,
+    docker: ComposeLike,
     stack_dir: Path,
     web_service: str,
     db_service: str,

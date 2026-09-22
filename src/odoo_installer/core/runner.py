@@ -8,12 +8,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from odoo_installer.adapters.docker import DockerLike
+from odoo_installer.adapters.docker import ComposeLike
 from odoo_installer.constants import RUNNER_HTTP_PORT
 
 
 def install_modules(
-    docker: DockerLike,
+    docker: ComposeLike,
     stack_dir: Path,
     web_service: str,
     db: str,

@@ -161,8 +161,11 @@ reachability. Exits **4** when a critical check fails.
 oii install [--apply]
 ```
 
-Installs docker engine, the compose plugin and git via pacman (Arch) or apt
-(Debian/Ubuntu). Never installs Odoo itself. Idempotent — a satisfied host is a no-op.
+Installs the container runtime (podman or docker per `container_runtime`), the
+compose provider and git via pacman (Arch) or apt (Debian/Ubuntu). Under podman it
+also enables `podman.socket` (the compose provider's way in), linger and
+`podman-restart.service` for boot survival. Never installs Odoo itself.
+Idempotent — a satisfied host is a no-op.
 
 ### 4.3 `config` — global configuration
 
@@ -181,9 +184,28 @@ oii config path
 | `port_range_start` / `port_range_end` | `8069` / `8099` | auto-allocation range (≥ 1024) |
 | `github_token_env` | `GITHUB_TOKEN` | env var holding a GitHub token |
 | `tested_repo_url` | *(empty)* | central whitelist repo (see §4.7) |
+| `container_runtime` | `auto` | `auto`, `podman` or `docker` (`auto` prefers podman) |
 
 Unknown keys are rejected; `set` validates values; `edit` validates the result and
 saves nothing when invalid.
+
+#### Podman (rootless-first)
+
+Both runtimes speak the compose specification, so every command works under
+either. With podman the recommended one-time host setup is:
+
+```bash
+oii install --apply            # plans: podman, compose provider, podman.socket,
+                               #        linger, podman-restart.service
+oii doctor                     # verifies all of the above are actually usable
+```
+
+`podman.socket` matters because the external compose provider (docker-compose)
+connects to podman through that socket — `oii doctor` fails the compose check
+with the exact fix when it is not listening. Linger +
+`podman-restart.service` keep rootless containers alive across logout and
+reboot (both are doctor WARNs, not FAILs — desktop boxes may not want them).
+`CONTAINER_HOST`/`DOCKER_HOST` pass through unchanged for remote sockets.
 
 ### 4.4 `instance` — stack lifecycle
 

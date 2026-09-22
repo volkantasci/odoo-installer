@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from typer.testing import CliRunner
 
 from odoo_installer.cli.deps import Container
 from odoo_installer.cli.main import app
+from odoo_installer.exceptions import StackError
 from odoo_installer.schemas import GlobalConfig
 
 runner = CliRunner()
@@ -148,6 +150,93 @@ def test_show_unknown_instance_fails(patch_deps, tmp_path: Path) -> None:
     patch_deps(make_container(tmp_path))
     result = runner.invoke(app, ["instance", "show", "ghost"])
     assert result.exit_code == 1
+
+
+def test_show_json_includes_manifest_and_containers(patch_deps, tmp_path: Path) -> None:
+    docker = FakeDocker(
+        containers=[
+            {
+                "name": "dev-web-1",
+                "service": "web",
+                "project": "dev",
+                "image": "odoo:19.0",
+                "ports": "0.0.0.0:8069->8069/tcp",
+                "state": "running",
+            },
+            {
+                "name": "dev-db-1",
+                "service": "db",
+                "project": "dev",
+                "image": "postgres:17",
+                "state": "running",
+            },
+        ]
+    )
+    patch_deps(make_container(tmp_path, docker=docker))
+    runner.invoke(app, ["instance", "create", "dev", "--apply"])
+    result = runner.invoke(app, ["instance", "show", "dev", "--json"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["name"] == "dev"
+    assert payload["image"] == "odoo:19.0"
+    assert payload["reachable"] is True
+    assert [c["service"] for c in payload["containers"]] == ["web", "db"]
+    assert payload["containers"][0]["state"] == "running"
+
+
+def test_show_json_marks_unreachable_runtime(patch_deps, tmp_path: Path) -> None:
+    docker = FakeDocker(containers_error=StackError("podman ps failed: no socket"))
+    patch_deps(make_container(tmp_path, docker=docker))
+    runner.invoke(app, ["instance", "create", "dev", "--apply"])
+    result = runner.invoke(app, ["instance", "show", "dev", "--json"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["reachable"] is False
+    assert payload["containers"] == []
+
+
+def test_list_json(patch_deps, tmp_path: Path) -> None:
+    patch_deps(make_container(tmp_path))
+    runner.invoke(app, ["instance", "create", "dev", "--apply"])
+    runner.invoke(app, ["instance", "create", "shop", "--apply"])
+    result = runner.invoke(app, ["instance", "list", "--json"])
+    assert result.exit_code == 0, result.output
+    entries = json.loads(result.output)
+    assert [entry["name"] for entry in entries] == ["dev", "shop"]
+    assert entries[0]["http_port"] == 8069
+    assert entries[1]["http_port"] == 8070
+
+
+def test_create_skips_ports_reserved_by_stopped_stacks(patch_deps, tmp_path: Path) -> None:
+    # instance "first" is registered on 8069 but stopped: no socket, only the
+    # registry claim — auto-allocation for "second" must skip 8069 anyway.
+    container = make_container(tmp_path)
+    patch_deps(container)
+    runner.invoke(app, ["instance", "create", "first", "--apply"])
+    container.docker.compose_calls.clear()
+    result = runner.invoke(app, ["instance", "create", "second", "--apply"])
+    assert result.exit_code == 0, result.output
+    assert "8070" in result.output
+    assert "8069" not in result.output
+
+
+def test_create_rejects_port_reserved_by_other_instance(patch_deps, tmp_path: Path) -> None:
+    container = make_container(tmp_path)
+    patch_deps(container)
+    runner.invoke(app, ["instance", "create", "first", "--apply"])
+    result = runner.invoke(app, ["instance", "create", "second", "--http-port", "8069"])
+    assert result.exit_code == 1
+    assert "reserved by instance 'first'" in result.output
+
+
+def test_create_reaccepts_own_pinned_port_when_running(patch_deps, tmp_path: Path) -> None:
+    container = make_container(tmp_path)
+    patch_deps(container)
+    runner.invoke(app, ["instance", "create", "dev", "--apply"])
+    container.system.block_port(8069)  # its own web container holds the port now
+    result = runner.invoke(app, ["instance", "create", "dev", "--http-port", "8069", "--apply"])
+    assert result.exit_code == 0, result.output
+    assert "already satisfied" in result.output
 
 
 def test_secret_prints_master_password(patch_deps, tmp_path: Path) -> None:

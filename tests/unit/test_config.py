@@ -176,3 +176,15 @@ def test_instance_logs_dir_adopted_uses_xdg_state(monkeypatch, tmp_path: Path) -
     logs = config_mod.instance_logs_dir(manifest)
     assert str(tmp_path / "state") in str(logs)
     assert logs.name == "stack"
+
+
+def test_container_runtime_default_and_valid_values(tmp_path: Path) -> None:
+    assert config_mod.load_global_config(tmp_path / "missing.toml").container_runtime == "auto"
+    for value in ("auto", "podman", "docker"):
+        config = config_mod.set_config_value("container_runtime", value, path=tmp_path / "c.toml")
+        assert config.container_runtime == value
+
+
+def test_container_runtime_invalid_value_is_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError):
+        config_mod.set_config_value("container_runtime", "containerd", path=tmp_path / "c.toml")

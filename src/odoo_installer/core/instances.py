@@ -13,7 +13,7 @@ import secrets
 from dataclasses import dataclass
 from pathlib import Path
 
-from odoo_installer.adapters.docker import DockerLike, host_port_for
+from odoo_installer.adapters.docker import ComposeLike, host_port_for
 from odoo_installer.adapters.filesystem import FileSystemLike
 from odoo_installer.adapters.system import SystemLike
 from odoo_installer.config import load_registry, save_registry
@@ -60,12 +60,29 @@ def validate_instance_name(name: str) -> str:
     return name
 
 
-def allocate_port(system: SystemLike, config: GlobalConfig, requested: int | None) -> int:
+def allocate_port(
+    system: SystemLike,
+    config: GlobalConfig,
+    requested: int | None,
+    *,
+    reserved: dict[int, str] | None = None,
+) -> int:
+    """Pick the instance's host HTTP port.
+
+    `reserved` maps ports to the registered instance names that claim them: a
+    stopped stack holds no socket, so the registry — not the wire — is the
+    record of its claim, and auto-allocation must skip those ports.
+    """
+    reserved = reserved or {}
     if requested is not None:
+        if requested in reserved:
+            raise StackError(f"port {requested} is reserved by instance {reserved[requested]!r}")
         if system.port_in_use(requested):
             raise StackError(f"port {requested} is already in use")
         return requested
     for port in range(config.port_range_start, config.port_range_end + 1):
+        if port in reserved:
+            continue
         if not system.port_in_use(port):
             return port
     raise StackError(f"no free port in {config.port_range_start}-{config.port_range_end}")
@@ -78,23 +95,44 @@ def resolve_create_port(
     fs: FileSystemLike,
     stack_dir: Path,
     requested: int | None,
+    registry_path: Path | None = None,
 ) -> int:
     """Port resolution for `instance create` (DEVELOPMENT.md §7 idempotency).
 
-    1. explicit --http-port wins and must be free;
-    2. an existing instance manifest pins the port — re-running create must never
+    1. an existing instance manifest pins the port — re-running create must never
        drift the port (its own running container holds it, so a busy check would
-       wrongly allocate a new one);
-    3. otherwise allocate the first free port in the configured range.
+       wrongly allocate a new one); an explicit --http-port equal to the pinned
+       port is accepted for the same reason;
+    2. an explicit --http-port otherwise wins and must be free on the wire and
+       not reserved by another registered instance;
+    3. otherwise allocate the first port that is free on the wire and not
+       reserved by any registered (possibly stopped) instance.
     """
+    manifest = load_manifest(fs, stack_dir)
+    reserved = _registry_reservations(registry_path, exclude_dir=stack_dir)
     if requested is not None:
+        if manifest is not None and requested == manifest.http_port:
+            return requested
+        if requested in reserved:
+            raise StackError(f"port {requested} is reserved by instance {reserved[requested]!r}")
         if system.port_in_use(requested):
             raise StackError(f"port {requested} is already in use")
         return requested
-    manifest = load_manifest(fs, stack_dir)
     if manifest is not None:
         return manifest.http_port
-    return allocate_port(system, config, None)
+    return allocate_port(system, config, None, reserved=reserved)
+
+
+def _registry_reservations(registry_path: Path | None, *, exclude_dir: Path) -> dict[int, str]:
+    """port -> instance name for every registered stack except `exclude_dir`."""
+    if registry_path is None:
+        return {}
+    registry = load_registry(registry_path)
+    return {
+        entry.http_port: entry.name
+        for entry in registry.instances.values()
+        if entry.dir != exclude_dir
+    }
 
 
 def instance_dir(config: GlobalConfig, name: str, override: Path | None) -> Path:
@@ -154,7 +192,7 @@ def create_instance_plan(
     odoo_image: str,
     pg_tag: int,
     config: GlobalConfig,
-    docker: DockerLike,
+    docker: ComposeLike,
     fs: FileSystemLike,
     registry_path: Path,
 ) -> InstancePlan:
@@ -311,7 +349,7 @@ def _manifest_step(
     return Step(description=f"write {MANIFEST_NAME}", run=run)
 
 
-def compose_action(action: str, stack_dir: Path, docker: DockerLike, adopted: bool = False) -> str:
+def compose_action(action: str, stack_dir: Path, docker: ComposeLike, adopted: bool = False) -> str:
     """Run a reversible lifecycle action directly (no plan needed).
 
     Adopted stacks are managed read-mostly: `start` uses `docker compose start`,
@@ -333,7 +371,7 @@ def remove_instance_plan(
     name: str,
     registry_path: Path,
     fs: FileSystemLike,
-    docker: DockerLike,
+    docker: ComposeLike,
     remove_data: bool,
 ) -> list[Step]:
     """Build the removal plan; guards refuse anything the CLI did not create.
@@ -404,7 +442,7 @@ class DetectedStack:
     http_port: int
 
 
-def detect_stack(docker: DockerLike, stack_dir: Path) -> DetectedStack:
+def detect_stack(docker: ComposeLike, stack_dir: Path) -> DetectedStack:
     """Classify an existing compose project's containers into web/db services.
 
     Detection uses container labels only — the compose file is never parsed, so

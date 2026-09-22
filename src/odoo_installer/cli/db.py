@@ -8,6 +8,8 @@ user passes its name explicitly through the guarded path.
 
 from __future__ import annotations
 
+import json
+from dataclasses import asdict
 from typing import Annotated
 
 import typer
@@ -34,6 +36,10 @@ _INSTANCE_HELP = "Target instance (default: the only registered instance)."
 def list_dbs(
     *,
     instance: Annotated[str | None, typer.Option("--instance", help=_INSTANCE_HELP)] = None,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable JSON instead of a table."),
+    ] = False,
 ) -> None:
     """List the databases of the instance's db container."""
     container = deps.build()
@@ -45,6 +51,9 @@ def list_dbs(
     except OdooInstallerError as exc:
         error(str(exc))
         raise typer.Exit(code=1) from None
+    if as_json:
+        typer.echo(json.dumps([asdict(info) for info in databases], indent=2))
+        return
     if not databases:
         console.print("no databases found")
         return

@@ -5,12 +5,13 @@
 [![Python](https://img.shields.io/pypi/pyversions/odoo-installer)](https://pypi.org/project/odoo-installer/)
 [![License](https://img.shields.io/pypi/l/odoo-installer)](LICENSE)
 
-**One CLI for your Odoo 19.0 fleet.** Create and manage Docker stacks, install OCA
-modules at the correct branch, prove they work before they ship, and share approvals
-across machines — with plan-first safety everywhere.
+**One CLI for your Odoo 19.0 fleet.** Create and manage container stacks (rootless
+Podman or Docker), install OCA modules at the correct branch, prove they work before
+they ship, and share approvals across machines — with plan-first safety everywhere.
 
-- 🐳 **Docker-only runtime** — every instance is a compose stack; Odoo is never
-  installed natively.
+- 🦭 **Podman-first, Docker-compatible** — every instance is a compose stack on your
+  chosen runtime (`container_runtime = auto|podman|docker`, `auto` prefers rootless
+  podman); Odoo is never installed natively.
 - 📋 **Plan-first safety** — every mutation prints its exact plan (live `[i/n]`
   progress) and runs only with `--apply` — plus `--yes` when destructive.
 - 🌿 **Correct OCA branches** — `origin/19.0` is verified via the GitHub API before

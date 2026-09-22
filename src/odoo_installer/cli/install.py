@@ -20,14 +20,15 @@ def install(
         typer.Option("--apply", help="Execute the plan (without it, this is a dry run)."),
     ] = False,
 ) -> None:
-    """Install host prerequisites (docker engine, compose plugin, git).
+    """Install host prerequisites (container runtime, compose provider, git).
 
-    Never installs Odoo itself — Odoo runs in Docker stacks created with
-    `odoo-installer instance create`.
+    Never installs Odoo itself — Odoo runs in container stacks created with
+    `odoo-installer instance create`. Under podman this also enables linger,
+    podman.socket (for the compose provider) and podman-restart.service.
     """
     container = deps.build()
     try:
-        steps = host_install_plan(container.docker, container.system)
+        steps = host_install_plan(container.docker, container.system, container.fs)
     except OdooInstallerError as exc:
         error(str(exc))
         raise typer.Exit(code=1) from None

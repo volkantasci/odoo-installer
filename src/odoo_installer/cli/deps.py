@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from odoo_installer.adapters.docker import DockerAdapter
+from odoo_installer.adapters.docker import ComposeAdapter, resolve_runtime
 from odoo_installer.adapters.filesystem import FileSystemAdapter
 from odoo_installer.adapters.git import GitAdapter
 from odoo_installer.adapters.github import GitHubAdapter
@@ -31,7 +31,7 @@ class Container:
     config_path: Path
     registry_path: Path
     tested_path: Path
-    docker: DockerAdapter
+    docker: ComposeAdapter
     git: GitAdapter
     system: SystemAdapter
     github: GitHubAdapter
@@ -41,12 +41,13 @@ class Container:
 def build(config_path: Path | None = None) -> Container:
     path = config_path or default_config_path()
     config = load_global_config(path)
+    runtime = resolve_runtime(config.container_runtime)
     return Container(
         config=config,
         config_path=path,
         registry_path=default_registry_path(),
         tested_path=default_tested_path(),
-        docker=DockerAdapter(),
+        docker=ComposeAdapter(runtime=runtime),
         git=GitAdapter(),
         system=SystemAdapter(),
         github=GitHubAdapter(token_env=config.github_token_env),

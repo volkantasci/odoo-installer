@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
 
 jobs:
   lint:
@@ -40,6 +43,28 @@ jobs:
       - name: Test
         run: pytest --cov --cov-report=term-missing
 
-  # The integration job (docker-based, pytest -m integration) is added in M2 when the
-  # first integration test lands: with an empty selection pytest exits 5 and the job
-  # would fail spuriously.
+  # Real-stack lifecycle on rootless podman (create → healthy → db ops →
+  # stop/start → remove). ubuntu runners ship podman; the compose provider is
+  # docker-compose. Triggered manually/nightly so a slow image pull never
+  # blocks a PR; the same suite runs locally via OII_INTEGRATION=1.
+  integration:
+    name: integration (rootless podman)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: pip install -e ".[dev]"
+      - name: Show runtime versions
+        run: |
+          podman --version
+          podman compose version --short || true
+      - name: Integration tests
+        env:
+          OII_INTEGRATION: "1"
+          OII_INTEGRATION_RUNTIME: podman
+        run: pytest tests/integration -m integration -v

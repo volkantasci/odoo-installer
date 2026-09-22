@@ -5,6 +5,38 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-09-22
+
+### Added
+
+- **Podman support (rootless-first).** New `container_runtime` config key
+  (`auto` | `podman` | `docker`, default `auto` prefers Podman when usable).
+  All engine interaction goes through one runtime-agnostic compose adapter;
+  podman's `ps` JSON shape (Labels as a map, Ports as a list) and its
+  no-healthcheck `inspect` failure are normalized, so every command — create,
+  db, module, test, adopt — works unchanged under either runtime.
+- **Honest podman doctor checks.** Under podman, `doctor` verifies the rootless
+  socket is actually listening (`podman compose version` succeeds even when it
+  is not, but `up -d` would fail), and warns when linger or
+  `podman-restart.service` are disabled (rootless containers then stop at
+  logout/boot). `install` plans the fixes: `podman.socket`, linger,
+  `podman-restart.service`.
+- **`instance list --json` / `instance show --json` / `db list --json`.**
+  `instance show` now reports per-container states structurally
+  (`reachable`, `containers[].state`) instead of echoing `compose ps` text.
+- **Integration test layer** (`pytest -m integration`, opt-in via
+  `OII_INTEGRATION=1`): a full real-stack lifecycle on rootless podman —
+  create → wait-healthy → db create/list → stop/start → remove — inside a
+  throwaway XDG config and a session-scoped `podman system service` socket.
+
+### Fixed
+
+- **Port reservations survive stopped stacks.** Port allocation now skips (and
+  `--http-port` validates against) ports claimed in the registry by other
+  instances — a stopped stack holds no socket, but its claim must not be
+  handed to a new instance. Re-running `create` with an explicit `--http-port`
+  equal to the instance's pinned port is accepted again instead of "in use".
+
 ## [0.6.4] - 2026-09-12
 
 ### Added

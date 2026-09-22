@@ -3,13 +3,18 @@
 Each check returns a CheckResult and never raises: expected adapter errors
 (OdooInstallerError) are converted to FAIL, non-critical services that are down
 (github) degrade to WARN. Any FAIL makes the CLI exit with code 4.
+
+Checks are runtime-aware: under podman the permission model is rootless-first
+(so the docker-group check is replaced by linger / podman-restart.service WARNs
+for boot survival), under docker it stays the classic group membership check.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 
-from odoo_installer.adapters.docker import DockerLike
+from odoo_installer.adapters.docker import ComposeLike
 from odoo_installer.adapters.filesystem import FileSystemLike
 from odoo_installer.adapters.github import GitHubLike
 from odoo_installer.adapters.system import SystemLike
@@ -21,24 +26,30 @@ from odoo_installer.schemas import CheckResult, CheckStatus, GlobalConfig
 DISK_FAIL_GIB = 2.0
 DISK_WARN_GIB = 5.0
 
+PODMAN_RESTART_SERVICE = "podman-restart.service"
+
 
 def run_doctor(
-    docker: DockerLike,
+    docker: ComposeLike,
     system: SystemLike,
     github: GitHubLike,
     fs: FileSystemLike,
     config: GlobalConfig,
 ) -> list[CheckResult]:
     """Run every host check and return results in stable display order."""
-    return [
-        _check_docker_engine(docker, system),
-        _check_compose(docker, system),
-        _check_docker_group(system),
+    checks = [
+        _check_runtime(docker, system),
+        _check_compose(docker, system, fs),
+        _check_permissions(docker, system),
         _check_git(system),
         _check_disk(fs, config),
         _check_ports(system, config),
         _check_github(github),
     ]
+    if docker.runtime == "podman":
+        checks.append(_check_linger(system))
+        checks.append(_check_podman_restart(system))
+    return checks
 
 
 def _guarded(name: str, fix_hint: str, probe: Callable[[], CheckResult]) -> CheckResult:
@@ -54,53 +65,151 @@ def _install_hint(system: SystemLike, pacman_pkg: str, apt_pkg: str) -> str:
     return f"install with: sudo pacman -S {pacman_pkg}"
 
 
-def _check_docker_engine(docker: DockerLike, system: SystemLike) -> CheckResult:
+def _check_runtime(docker: ComposeLike, system: SystemLike) -> CheckResult:
+    if docker.runtime == "podman":
+        return _guarded(
+            "container runtime",
+            _install_hint(system, "podman", "podman"),
+            lambda: CheckResult(
+                name="container runtime",
+                status=CheckStatus.OK,
+                detail=f"podman {docker.engine_version()} usable by the current user",
+            ),
+        )
     hint = (
         f"{_install_hint(system, 'docker', 'docker.io')}; then sudo systemctl enable --now docker"
     )
     return _guarded(
-        "docker engine",
+        "container runtime",
         hint,
         lambda: CheckResult(
-            name="docker engine",
+            name="container runtime",
             status=CheckStatus.OK,
-            detail=f"Docker engine {docker.engine_version()} running",
+            detail=f"docker engine {docker.engine_version()} running",
         ),
     )
 
 
-def _check_compose(docker: DockerLike, system: SystemLike) -> CheckResult:
+def _check_compose(docker: ComposeLike, system: SystemLike, fs: FileSystemLike) -> CheckResult:
+    if docker.runtime == "podman":
+        socket_check = _check_podman_socket(docker, fs)
+        if socket_check is not None:
+            return socket_check
     return _guarded(
-        "docker compose",
+        "compose",
         _install_hint(system, "docker-compose", "docker-compose-plugin"),
         lambda: CheckResult(
-            name="docker compose",
+            name="compose",
             status=CheckStatus.OK,
-            detail=f"compose plugin {docker.compose_version()}",
+            detail=f"compose provider {docker.compose_version()} via {docker.runtime}",
         ),
     )
 
 
-def _check_docker_group(system: SystemLike) -> CheckResult:
+def _check_podman_socket(docker: ComposeLike, fs: FileSystemLike) -> CheckResult | None:
+    """FAIL when the rootless podman socket is not listening.
+
+    The compose provider connects through that socket; `podman compose version`
+    succeeds without it, so an explicit reachability probe is the only honest
+    signal that `instance create --apply` will get past `up -d`.
+    """
+    socket_uri = docker.remote_socket()
+    if not socket_uri:
+        return CheckResult(
+            name="compose",
+            status=CheckStatus.FAIL,
+            detail="cannot determine the rootless podman socket (podman info failed)",
+            fix_hint="check that 'podman info' works for the current user",
+        )
+    socket_path = Path(socket_uri.removeprefix("unix://"))
+    if not fs.exists(socket_path):
+        return CheckResult(
+            name="compose",
+            status=CheckStatus.FAIL,
+            detail=f"rootless podman socket {socket_path} is not listening — the compose "
+            "provider cannot reach podman without it",
+            fix_hint="run: systemctl --user enable --now podman.socket",
+        )
+    return None
+
+
+def _check_permissions(docker: ComposeLike, system: SystemLike) -> CheckResult:
+    if docker.runtime == "podman":
+        # The runtime check already proved `podman info` answers for this user;
+        # rootless podman needs no group, socket or service enrollment.
+        return CheckResult(
+            name="runtime permissions",
+            status=CheckStatus.OK,
+            detail="rootless podman usable by the current user",
+        )
     members = system.group_members("docker")
     if members is None:
         return CheckResult(
-            name="docker permissions",
+            name="runtime permissions",
             status=CheckStatus.WARN,
             detail="no 'docker' group on this host (rootless docker?)",
             fix_hint="verify that 'docker ps' works for the current user",
         )
     if system.current_username() in members:
         return CheckResult(
-            name="docker permissions",
+            name="runtime permissions",
             status=CheckStatus.OK,
             detail="user is configured in the docker group",
         )
     return CheckResult(
-        name="docker permissions",
+        name="runtime permissions",
         status=CheckStatus.FAIL,
         detail="user is not configured in the docker group",
         fix_hint="run: sudo usermod -aG docker $USER (then re-login)",
+    )
+
+
+def _check_linger(system: SystemLike) -> CheckResult:
+    linger = system.linger_enabled()
+    if linger is None:
+        return CheckResult(
+            name="linger (boot survival)",
+            status=CheckStatus.WARN,
+            detail="cannot determine linger status (no systemd user manager?)",
+            fix_hint="on servers run: sudo loginctl enable-linger $USER",
+        )
+    if linger:
+        return CheckResult(
+            name="linger (boot survival)",
+            status=CheckStatus.OK,
+            detail=f"linger enabled for {system.current_username()} — "
+            "rootless containers survive reboots",
+        )
+    return CheckResult(
+        name="linger (boot survival)",
+        status=CheckStatus.WARN,
+        detail="linger is disabled: rootless containers and user services stop at logout",
+        fix_hint="run: sudo loginctl enable-linger $USER",
+    )
+
+
+def _check_podman_restart(system: SystemLike) -> CheckResult:
+    enabled = system.user_service_enabled(PODMAN_RESTART_SERVICE)
+    if enabled is None:
+        return CheckResult(
+            name="podman boot restart",
+            status=CheckStatus.WARN,
+            detail=f"cannot query {PODMAN_RESTART_SERVICE} (no systemd user manager?)",
+            fix_hint=f"run: systemctl --user enable {PODMAN_RESTART_SERVICE}",
+        )
+    if enabled:
+        return CheckResult(
+            name="podman boot restart",
+            status=CheckStatus.OK,
+            detail=f"{PODMAN_RESTART_SERVICE} enabled — restart-policy containers "
+            "come back on boot",
+        )
+    return CheckResult(
+        name="podman boot restart",
+        status=CheckStatus.WARN,
+        detail=f"{PODMAN_RESTART_SERVICE} is disabled: containers with a restart policy "
+        "are not restarted on boot",
+        fix_hint=f"run: systemctl --user enable {PODMAN_RESTART_SERVICE}",
     )
 
 
@@ -171,15 +280,18 @@ def _check_github(github: GitHubLike) -> CheckResult:
         )
 
 
-def host_install_plan(docker: DockerLike, system: SystemLike) -> list[Step]:
+def host_install_plan(docker: ComposeLike, system: SystemLike, fs: FileSystemLike) -> list[Step]:
     """Plan steps to make host prerequisites ready; an empty list means satisfied."""
     steps: list[Step] = []
     try:
         docker.engine_version()
     except OdooInstallerError:
-        if system.which("docker") is None:
-            steps.append(_package_step(system, "docker", "docker.io"))
-        else:
+        if system.which(docker.runtime) is None:
+            if docker.runtime == "podman":
+                steps.append(_package_step(system, "podman", "podman"))
+            else:
+                steps.append(_package_step(system, "docker", "docker.io"))
+        elif docker.runtime == "docker":
             steps.append(
                 Step(
                     description="enable and start the docker service",
@@ -192,7 +304,36 @@ def host_install_plan(docker: DockerLike, system: SystemLike) -> list[Step]:
         steps.append(_package_step(system, "docker-compose", "docker-compose-plugin"))
     if system.which("git") is None:
         steps.append(_package_step(system, "git", "git"))
+    if docker.runtime == "podman":
+        if not _podman_socket_listens(docker, fs):
+            steps.append(
+                Step(
+                    description="enable podman.socket so compose can reach rootless podman",
+                    run=lambda: system.enable_user_service("podman.socket"),
+                )
+            )
+        if system.linger_enabled() is False:
+            steps.append(
+                Step(
+                    description="enable linger so rootless containers survive reboots",
+                    run=lambda: system.enable_linger(),
+                )
+            )
+        if system.user_service_enabled(PODMAN_RESTART_SERVICE) is False:
+            steps.append(
+                Step(
+                    description=f"enable {PODMAN_RESTART_SERVICE} for boot-time restarts",
+                    run=lambda: system.enable_user_service(PODMAN_RESTART_SERVICE),
+                )
+            )
     return steps
+
+
+def _podman_socket_listens(docker: ComposeLike, fs: FileSystemLike) -> bool:
+    socket_uri = docker.remote_socket()
+    if not socket_uri:
+        return False
+    return fs.exists(Path(socket_uri.removeprefix("unix://")))
 
 
 def _package_step(system: SystemLike, pacman_pkg: str, apt_pkg: str) -> Step:

@@ -12,7 +12,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from odoo_installer.adapters.docker import DockerLike
+from odoo_installer.adapters.docker import ComposeLike
 from odoo_installer.core.plan import Step
 from odoo_installer.exceptions import StackError
 
@@ -36,7 +36,7 @@ def validate_db_name(name: str) -> str:
 
 
 def _psql_exec(
-    docker: DockerLike,
+    docker: ComposeLike,
     stack_dir: Path,
     db_service: str,
     db_user: str,
@@ -50,7 +50,7 @@ def _psql_exec(
 
 
 def execute_sql(
-    docker: DockerLike, stack_dir: Path, db_service: str, db_user: str, db: str, sql: str
+    docker: ComposeLike, stack_dir: Path, db_service: str, db_user: str, db: str, sql: str
 ) -> str:
     """Run internally generated SQL (names already validated) on one database."""
     return _psql_exec(docker, stack_dir, db_service, db_user, sql, db=db)
@@ -60,7 +60,7 @@ _MODULE_NAME_PATTERN = r"^[A-Za-z0-9_.-]+$"
 
 
 def module_states(
-    docker: DockerLike,
+    docker: ComposeLike,
     stack_dir: Path,
     db_service: str,
     db_user: str,
@@ -92,7 +92,7 @@ def module_states(
 
 
 def list_databases(
-    docker: DockerLike, stack_dir: Path, db_service: str, db_user: str
+    docker: ComposeLike, stack_dir: Path, db_service: str, db_user: str
 ) -> list[DatabaseInfo]:
     sql = (
         "SELECT datname, pg_size_pretty(pg_database_size(datname)) "
@@ -109,7 +109,7 @@ def list_databases(
 
 
 def create_database(
-    docker: DockerLike, stack_dir: Path, db_service: str, db_user: str, name: str
+    docker: ComposeLike, stack_dir: Path, db_service: str, db_user: str, name: str
 ) -> str:
     validate_db_name(name)
     exists = _psql_exec(
@@ -126,7 +126,7 @@ def create_database(
 
 
 def drop_database_plan(
-    docker: DockerLike, stack_dir: Path, db_service: str, db_user: str, name: str
+    docker: ComposeLike, stack_dir: Path, db_service: str, db_user: str, name: str
 ) -> list[Step]:
     validate_db_name(name)
     if name in PROTECTED_DATABASES:
@@ -156,7 +156,7 @@ def drop_database_plan(
 
 
 def reset_database_plan(
-    docker: DockerLike, stack_dir: Path, db_service: str, db_user: str, name: str
+    docker: ComposeLike, stack_dir: Path, db_service: str, db_user: str, name: str
 ) -> list[Step]:
     steps = drop_database_plan(docker, stack_dir, db_service, db_user, name)
 

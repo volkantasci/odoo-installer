@@ -16,9 +16,14 @@ from odoo_installer.schemas import RepoSummary
 
 
 class FakeDocker:
+    # Default socket the podman fakes pretend to expose (tests mark it as
+    # existing on the FakeFs unless they explicitly probe the missing case).
+    DEFAULT_PODMAN_SOCKET = "unix:///run/user/1000/podman/podman.sock"
+
     def __init__(
         self,
         *,
+        runtime: str = "docker",
         engine_version: str = "28.3.3",
         compose_version: str = "v2.39.2",
         engine_error: str | None = None,
@@ -27,13 +32,18 @@ class FakeDocker:
         containers: list[dict[str, str]] | None = None,
         compose_results: list[str] | None = None,
         compose_result_results: list[tuple[int, str]] | None = None,
+        containers_error: Exception | None = None,
+        podman_socket: str | None = DEFAULT_PODMAN_SOCKET,
     ) -> None:
+        self.runtime = runtime
         self._engine_version = engine_version
         self._compose_version = compose_version
         self._engine_error = engine_error
         self._compose_error = compose_error
         self._healthy = healthy
         self._containers = containers or []
+        self._containers_error = containers_error
+        self._podman_socket = podman_socket
         self.compose_results = compose_results if compose_results is not None else []
         self.compose_result_results = (
             compose_result_results if compose_result_results is not None else []
@@ -42,6 +52,11 @@ class FakeDocker:
         self.health_checks: list[str] = []
         self.logged: list[str] = []
         self.container_queries: list[Path] = []
+
+    def remote_socket(self) -> str | None:
+        if self.runtime != "podman":
+            return None
+        return self._podman_socket
 
     def engine_version(self) -> str:
         if self._engine_error is not None:
@@ -69,6 +84,8 @@ class FakeDocker:
 
     def compose_containers(self, working_dir: Path) -> list[ComposeContainerInfo]:
         self.container_queries.append(Path(working_dir))
+        if self._containers_error is not None:
+            raise self._containers_error
         return [
             ComposeContainerInfo(
                 name=c["name"],
@@ -103,6 +120,8 @@ class FakeSystem:
         docker_group_members: tuple[str, ...] | None = ("alice",),
         username: str = "alice",
         binaries: set[str] | None = None,
+        linger: bool | None = False,
+        user_units_enabled: set[str] | None = None,
     ) -> None:
         self._busy = busy_ports or set()
         self._has_git = has_git
@@ -110,8 +129,12 @@ class FakeSystem:
         self._docker_group_members = docker_group_members
         self._username = username
         self._binaries = binaries if binaries is not None else {"git", "docker", "sudo"}
+        self._linger = linger
+        self._user_units_enabled = user_units_enabled or set()
         self.installed: list[list[str]] = []
         self.enabled: list[str] = []
+        self.linger_enabled_calls = 0
+        self.enabled_user_units: list[str] = []
 
     def which(self, binary: str) -> str | None:
         if binary == "git" and not self._has_git:
@@ -146,6 +169,22 @@ class FakeSystem:
 
     def enable_service(self, name: str) -> str:
         self.enabled.append(name)
+        return f"enabled {name}"
+
+    def linger_enabled(self) -> bool | None:
+        self.linger_enabled_calls += 1
+        return self._linger
+
+    def user_service_enabled(self, name: str) -> bool | None:
+        return name in self._user_units_enabled
+
+    def enable_linger(self) -> str:
+        self._linger = True
+        return "linger enabled"
+
+    def enable_user_service(self, name: str) -> str:
+        self.enabled_user_units.append(name)
+        self._user_units_enabled.add(name)
         return f"enabled {name}"
 
 
@@ -196,12 +235,17 @@ class GitHubDown(FakeGitHub):
 class FakeFs:
     def __init__(self, free_gib: float = 50.0) -> None:
         self._free_gib = free_gib
+        self._known_paths: set[Path] = set()
+
+    def remember(self, path: Path) -> None:
+        """Pretend `path` exists (for socket paths outside tmp_path)."""
+        self._known_paths.add(path)
 
     def disk_free_gib(self, path: Path) -> tuple[float, Path]:
         return self._free_gib, path
 
     def exists(self, path: Path) -> bool:
-        return path.exists()
+        return path in self._known_paths or path.exists()
 
     def ensure_dir(self, path: Path) -> None:
         path.mkdir(parents=True, exist_ok=True)

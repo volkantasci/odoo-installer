@@ -54,9 +54,9 @@ def test_doctor_json_all_ok(patch_deps, tmp_path: Path) -> None:
     assert result.exit_code == 0
     statuses = {check["name"]: check["status"] for check in json.loads(result.output)}
     assert set(statuses) == {
-        "docker engine",
-        "docker compose",
-        "docker permissions",
+        "container runtime",
+        "compose",
+        "runtime permissions",
         "git",
         "disk space",
         "ports",
@@ -69,8 +69,38 @@ def test_doctor_table_renders_without_json(patch_deps, tmp_path: Path) -> None:
     patch_deps(make_container(tmp_path))
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
-    assert "docker engine" in result.output
+    assert "container runtime" in result.output
     assert "7 checks" in result.output
+
+
+def test_doctor_podman_adds_boot_survival_checks(patch_deps, tmp_path: Path) -> None:
+    fs = FakeFs()
+    fs.remember(Path(FakeDocker.DEFAULT_PODMAN_SOCKET.removeprefix("unix://")))
+    patch_deps(
+        make_container(
+            tmp_path,
+            docker=FakeDocker(runtime="podman", engine_version="6.1.1"),
+            system=FakeSystem(docker_group_members=None, linger=True),
+            fs=fs,
+        )
+    )
+    result = runner.invoke(app, ["doctor", "--json"])
+    assert result.exit_code == 0
+    statuses = {check["name"]: check["status"] for check in json.loads(result.output)}
+    assert set(statuses) == {
+        "container runtime",
+        "compose",
+        "runtime permissions",
+        "git",
+        "disk space",
+        "ports",
+        "github api",
+        "linger (boot survival)",
+        "podman boot restart",
+    }
+    assert statuses["runtime permissions"] == "ok"
+    assert statuses["linger (boot survival)"] == "ok"
+    assert statuses["podman boot restart"] == "warn"  # not enabled by default fake
 
 
 def test_doctor_exit_4_on_critical_failure(patch_deps, tmp_path: Path) -> None:

@@ -1,12 +1,15 @@
-"""`odoo-installer instance` — create and manage Odoo Docker stacks."""
+"""`odoo-installer instance` — create and manage Odoo container stacks."""
 
 from __future__ import annotations
 
+import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
+from odoo_installer.adapters.docker import ComposeContainerInfo
 from odoo_installer.cli import deps
 from odoo_installer.config import load_registry
 from odoo_installer.console import console, error, progress_reporter, render_plan, render_registry
@@ -66,6 +69,7 @@ def create(
             fs=container.fs,
             stack_dir=stack_dir,
             requested=http_port,
+            registry_path=container.registry_path,
         )
         plan = create_instance_plan(
             name=instance_name,
@@ -96,10 +100,24 @@ def create(
 
 
 @app.command("list")
-def list_instances() -> None:
+def list_instances(
+    *,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable JSON instead of a table."),
+    ] = False,
+) -> None:
     """List registered instances."""
     container = deps.build()
     registry = load_registry(container.registry_path)
+    if as_json:
+        typer.echo(
+            json.dumps(
+                [entry.model_dump(mode="json") for entry in registry.instances.values()],
+                indent=2,
+            )
+        )
+        return
     if not registry.instances:
         console.print("no instances registered")
         return
@@ -107,7 +125,14 @@ def list_instances() -> None:
 
 
 @app.command("show")
-def show(name: str) -> None:
+def show(
+    name: str,
+    *,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable JSON instead of rich text."),
+    ] = False,
+) -> None:
     """Show one instance: manifest details and container state."""
     container = deps.build()
     try:
@@ -118,6 +143,13 @@ def show(name: str) -> None:
     except OdooInstallerError as exc:
         error(str(exc))
         raise typer.Exit(code=1) from None
+    containers, reachable = _containers_for(container, stack_dir)
+    if as_json:
+        payload = manifest.model_dump(mode="json")
+        payload["reachable"] = reachable
+        payload["containers"] = [asdict(info) for info in containers]
+        typer.echo(json.dumps(payload, indent=2))
+        return
     console.print(
         f"[bold]{manifest.name}[/bold] — Odoo {manifest.odoo_version} ({manifest.image}), "
         f"postgres {manifest.pg_tag}"
@@ -125,10 +157,24 @@ def show(name: str) -> None:
     console.print(f"  directory: {manifest.dir}")
     console.print(f"  http port: {manifest.http_port}")
     console.print(f"  adopted:   {'yes' if manifest.adopted else 'no'}")
+    if not reachable:
+        console.print("[yellow]⚠ stack is not reachable via the container runtime[/yellow]")
+        return
+    if not containers:
+        console.print("[yellow]⚠ no containers exist for this stack (never started?)[/yellow]")
+        return
+    for info in containers:
+        console.print(f"  {info.service or info.name}: [bold]{info.state}[/bold] ({info.image})")
+
+
+def _containers_for(
+    container: deps.Container, stack_dir: Path
+) -> tuple[list[ComposeContainerInfo], bool]:
+    """Containers of the stack, plus whether the runtime answered at all."""
     try:
-        console.print(container.docker.compose(["ps"], stack_dir))
+        return container.docker.compose_containers(stack_dir), True
     except OdooInstallerError:
-        console.print("[dim]stack is not reachable via docker compose[/dim]")
+        return [], False
 
 
 @app.command("start")

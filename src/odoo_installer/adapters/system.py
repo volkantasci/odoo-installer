@@ -27,6 +27,10 @@ class SystemLike(Protocol):
     def package_manager(self) -> str | None: ...
     def install_packages(self, packages: list[str]) -> str: ...
     def enable_service(self, name: str) -> str: ...
+    def linger_enabled(self) -> bool | None: ...
+    def user_service_enabled(self, name: str) -> bool | None: ...
+    def enable_linger(self) -> str: ...
+    def enable_user_service(self, name: str) -> str: ...
 
 
 class SystemAdapter:
@@ -76,6 +80,56 @@ class SystemAdapter:
         return self._sudo_run(
             ["sudo", "systemctl", "enable", "--now", name], f"enable service {name}"
         )
+
+    def linger_enabled(self) -> bool | None:
+        """Whether the current user survives logout; None if undeterminable.
+
+        Rootless podman containers only survive reboots when the user manager
+        stays active, which `loginctl enable-linger` guarantees.
+        """
+        marker = Path("/var/lib/systemd/linger") / self.current_username()
+        if not marker.parent.is_dir():
+            return None
+        return marker.exists()
+
+    def user_service_enabled(self, name: str) -> bool | None:
+        """Whether a systemd user unit is enabled; None when undeterminable."""
+        try:
+            proc = subprocess.run(
+                ["systemctl", "--user", "is-enabled", name],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if proc.returncode == 0:
+            return True
+        # rc 1 = disabled; rc >1 (unit missing / no user bus) = undeterminable
+        return False if proc.returncode == 1 else None
+
+    def enable_linger(self) -> str:
+        return self._sudo_run(
+            ["sudo", "loginctl", "enable-linger", self.current_username()],
+            "enable linger for the current user",
+        )
+
+    def enable_user_service(self, name: str) -> str:
+        try:
+            proc = subprocess.run(
+                ["systemctl", "--user", "enable", "--now", name],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=True,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise PrerequisiteError(f"enable user service {name}: timed out") from exc
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or "").strip() or f"exit code {exc.returncode}"
+            raise PrerequisiteError(f"enable user service {name}: {detail}") from exc
+        return proc.stdout.strip() or "done"
 
     def _sudo_run(self, cmd: list[str], what: str) -> str:
         try:

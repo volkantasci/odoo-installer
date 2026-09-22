@@ -16,7 +16,7 @@ Locked in with the project owner before implementation:
 
 | # | Decision | Choice |
 |---|----------|--------|
-| D1 | Runtime model | **Docker only.** The CLI never installs Odoo natively. It generates and manages `docker compose` stacks (web + db) and runs all Odoo commands inside containers. |
+| D1 | Runtime model | **Compose-spec runtimes: Podman (preferred) or Docker.** The CLI never installs Odoo natively. It generates and manages compose stacks (web + db) and runs all Odoo commands inside containers. The runtime is chosen by the `container_runtime` config key (`auto` prefers podman); one adapter normalizes the engines' output differences. |
 | D2 | Odoo version | **19.0 only** for v1. The version is a constant (`ODOO_VERSION = "19.0"`), not a user-facing matrix. Default image: `odoo:19.0` (Docker Hub, active; dated tags like `19.0-20260817` exist). |
 | D3 | Host OS support | **Arch first** (pacman adapter, tested for real on this machine), **Debian/Ubuntu next** (apt adapter in a later milestone). |
 | D4 | Language & packaging | Python `>= 3.11`, src layout, `hatchling` build backend, console script `odoo-installer` (+ short alias `oii`), developed and used from a local `.venv`. |
@@ -187,10 +187,10 @@ src/odoo_installer/
 └── py.typed
 tests/
 ├── conftest.py            # normalizes TERM/NO_COLOR/FORCE_COLOR so rich output stays plain text in assertions
-└── unit/                  # fakes only, offline, < 5 s
-    └── fakes.py           # FakeDocker, FakeGit, FakeGitHub, FakeSystem, FakeFs
-
-`tests/integration/` (real git/docker, marker `integration`) is deferred to v1.1 — see §8.
+├── unit/                  # fakes only, offline, < 5 s
+│   └── fakes.py           # FakeDocker, FakeGit, FakeGitHub, FakeSystem, FakeFs
+└── integration/           # real runtime, opt-in via OII_INTEGRATION=1 (since 0.7.0)
+    └── test_smoke.py      # full stack lifecycle on rootless podman, hermetic XDG + socket
 ```
 
 ### 3.3 Dependencies
@@ -375,14 +375,11 @@ Pyramid, enforced by CI:
 | Level | Scope | Rules |
 |-------|-------|-------|
 | Unit (`tests/unit/`) | core + cli against `FakeDocker`, `FakeGit`, `FakeGitHub`, `FakeSystem`, `tmp_path` | offline, deterministic, < 5 s, no markers; every core function's plan generation AND execution paths covered |
-| Integration (`tests/integration/`, marker `integration`, opt-in via `OII_INTEGRATION=1`) — **deferred to v1.1** | real `git clone` of a small OCA repo, real `docker compose up` on an ephemeral port, full `instance create → module add → module install → test module` cycle on a throwaway stack | planned: run locally and in a CI docker job; tear down everything in `finally` |
+| Integration (`tests/integration/`, marker `integration`, opt-in via `OII_INTEGRATION=1`) — **live since 0.7.0** | real rootless podman lifecycle: `instance create → healthy → db create/list → stop/start → remove`, inside a throwaway XDG config and a session-scoped `podman system service` socket (`OII_INTEGRATION_RUNTIME=docker` selects docker) | run locally or in the nightly/manual CI `integration` job; never part of the PR gate (image pulls are slow) |
 | Live smoke (manual, documented) | any adopted stack | read-mostly commands + one scratch-DB module test; never mutates the production DB. Note: this machine currently has no live stack (the former `~/Projects/odoo-docker` was decommissioned) |
 
-**Deferral note (recorded at v0.1.0):** the integration layer and its CI docker job
-were deferred to v1.1 — the M4/M5 acceptance relied on the unit layer plus the
-live-stack smoke instead. The `integration` marker remains registered in
-`pyproject.toml`, but until the layer lands `pytest -m integration` selects zero tests
-and exits 5, so it is **not** part of the v0.1.0 quality gates.
+**History note:** the integration layer was deferred at v0.1.0 (unit layer + live smoke
+carried the M4/M5 acceptance); it landed in 0.7.0 together with podman support.
 
 Quality gates (every milestone, all green before merge):
 
@@ -390,7 +387,7 @@ Quality gates (every milestone, all green before merge):
 ruff format --check . && ruff check .
 mypy src
 pytest                                  # unit
-# v1.1: pytest -m integration           # when docker/git available
+OII_INTEGRATION=1 pytest -m integration # real runtime (podman by default)
 pytest --cov=src/odoo_installer --cov-report=term-missing   # keep ≥ 85% overall
 ```
 
@@ -398,9 +395,9 @@ Log-parsing tests use inline recorded-style fixture logs (shaped from real 19.0 
 covering: pass, test failure, import error, missing manifest, "not installable",
 addons-path warning.
 
-CI (GitHub Actions): job `lint` (name `lint & types`; ruff format/check, mypy) and job
-`unit` on Python 3.11/3.12/3.13. The docker-based `integration` job lands together with
-the v1.1 integration layer; the workflow file documents this.
+CI (GitHub Actions): job `lint` (name `lint & types`; ruff format/check, mypy), job
+`unit` on Python 3.11/3.12/3.13, and job `integration` (rootless podman, nightly +
+manual dispatch only, so slow image pulls never block a PR).
 
 ---
 

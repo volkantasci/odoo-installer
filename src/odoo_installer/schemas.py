@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -49,6 +49,9 @@ class GlobalConfig(BaseModel):
     port_range_end: int = PORT_ALLOCATION_END
     github_token_env: str = "GITHUB_TOKEN"
     tested_repo_url: str = ""
+    # "auto" prefers podman (rootless-first), falls back to docker; an explicit
+    # value requires that binary on PATH (adapters.docker.resolve_runtime).
+    container_runtime: Literal["auto", "podman", "docker"] = "auto"
 
     @model_validator(mode="after")
     def _validate_port_range(self) -> Self:

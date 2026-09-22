@@ -19,7 +19,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from odoo_installer.adapters.docker import DockerLike
+from odoo_installer.adapters.docker import ComposeLike
 from odoo_installer.adapters.filesystem import FileSystemLike
 from odoo_installer.adapters.git import GitLike
 from odoo_installer.adapters.github import GitHubLike
@@ -122,7 +122,7 @@ def _resolve_requested_module_deps(
     manifest: InstanceManifest,
     fs: FileSystemLike,
     github: GitHubLike,
-    docker: DockerLike,
+    docker: ComposeLike,
     catalog: dict[str, TestedModule] | None,
 ) -> ModuleDepReport:
     """Classify every dependency of the requested modules (raw GitHub manifests)."""
@@ -278,7 +278,7 @@ def module_manifest_deps(fs: FileSystemLike, manifest: InstanceManifest, module:
     return []
 
 
-def list_core_addons(docker: DockerLike, manifest: InstanceManifest) -> set[str]:
+def list_core_addons(docker: ComposeLike, manifest: InstanceManifest) -> set[str]:
     """Module dirs of the Odoo core inside the web container (best effort).
 
     The official image keeps the core addons at
@@ -472,7 +472,7 @@ def _backup(fs: FileSystemLike, path: Path, content: str) -> Path:
     return backup
 
 
-def _compose_config_ok(docker: DockerLike, stack_dir: Path) -> bool:
+def _compose_config_ok(docker: ComposeLike, stack_dir: Path) -> bool:
     try:
         docker.compose(["config", "--quiet"], stack_dir, timeout_s=60)
         return True
@@ -535,7 +535,7 @@ def resolve_dependencies(
     *,
     fs: FileSystemLike,
     manifest: InstanceManifest,
-    docker: DockerLike,
+    docker: ComposeLike,
     targets: list[str],
     catalog: dict[str, TestedModule],
     github: GitHubLike | None = None,
@@ -646,7 +646,7 @@ def module_add_plan(
     github: GitHubLike,
     git: GitLike,
     fs: FileSystemLike,
-    docker: DockerLike,
+    docker: ComposeLike,
     catalog: dict[str, TestedModule] | None = None,
     recreate: bool = True,
     state: dict[str, bool] | None = None,
@@ -951,7 +951,7 @@ class AddPlanSet:
     # the caller must run `late_dep_provisions` right after applying the main plan
 
 
-def recreate_web_service(docker: DockerLike, manifest: InstanceManifest) -> str:
+def recreate_web_service(docker: ComposeLike, manifest: InstanceManifest) -> str:
     """Recreate the web service so new mounts/addons_path entries go live.
 
     A plain `restart` reuses the old container and would NOT mount the new
@@ -967,7 +967,7 @@ def _provisions_from_resolution(
     fs: FileSystemLike,
     github: GitHubLike,
     git: GitLike,
-    docker: DockerLike,
+    docker: ComposeLike,
     catalog: dict[str, TestedModule] | None,
     to_mount: list[tuple[str, str, list[str]]],
     to_extend: list[tuple[str, list[str]]],
@@ -1022,7 +1022,7 @@ def module_add_plan_set(
     github: GitHubLike,
     git: GitLike,
     fs: FileSystemLike,
-    docker: DockerLike,
+    docker: ComposeLike,
     catalog: dict[str, TestedModule] | None = None,
     resolve_deps: bool = True,
 ) -> AddPlanSet:
@@ -1116,7 +1116,7 @@ def late_dep_provisions(
     config: GlobalConfig,
     manifest: InstanceManifest,
     fs: FileSystemLike,
-    docker: DockerLike,
+    docker: ComposeLike,
     github: GitHubLike,
     git: GitLike,
     host_path: Path,
@@ -1168,7 +1168,7 @@ def module_remove_plan(
     dbms_execute_sql: Callable[..., str],
     git: GitLike,
     fs: FileSystemLike,
-    docker: DockerLike,
+    docker: ComposeLike,
 ) -> ModulePlan:
     """Reverse of add: unmount, optionally reset module states, optionally purge."""
     _owner, name = split_repo(repo_arg)
