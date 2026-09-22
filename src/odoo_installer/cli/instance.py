@@ -14,6 +14,7 @@ from odoo_installer.cli import deps
 from odoo_installer.config import load_registry
 from odoo_installer.console import console, error, progress_reporter, render_plan, render_registry
 from odoo_installer.constants import DEFAULT_ODOO_IMAGE
+from odoo_installer.core.health import instance_health
 from odoo_installer.core.instances import (
     adopt_instance_plan,
     compose_action,
@@ -24,10 +25,12 @@ from odoo_installer.core.instances import (
     load_manifest,
     remove_instance_plan,
     resolve_create_port,
+    resolve_stack_extras,
     validate_instance_name,
 )
 from odoo_installer.core.plan import apply_steps
 from odoo_installer.exceptions import OdooInstallerError, StackError
+from odoo_installer.schemas import StackExtras
 
 app = typer.Typer(no_args_is_help=True, help="Create and manage Odoo Docker stacks.")
 
@@ -56,6 +59,37 @@ def create(
         int | None,
         typer.Option("--pg-tag", help="Postgres image tag (default from config)."),
     ] = None,
+    ingress_network: Annotated[
+        str | None,
+        typer.Option(
+            "--ingress-network",
+            help="Attach web to this external network under an alias and publish no host "
+            "port (reverse-proxy routing); implies proxy_mode.",
+        ),
+    ] = None,
+    ingress_alias: Annotated[
+        str | None,
+        typer.Option("--ingress-alias", help="Network alias (default: the instance name)."),
+    ] = None,
+    memory: Annotated[
+        str | None,
+        typer.Option("--memory", help="Web service memory limit, e.g. 2g (compose mem_limit)."),
+    ] = None,
+    cpus: Annotated[
+        float | None,
+        typer.Option("--cpus", help="Web service CPU limit (compose cpus)."),
+    ] = None,
+    proxy_mode: Annotated[
+        bool | None,
+        typer.Option(
+            "--proxy-mode/--no-proxy-mode",
+            help="odoo.conf proxy_mode (default: on with --ingress-network, off otherwise).",
+        ),
+    ] = None,
+    workers: Annotated[
+        int | None,
+        typer.Option("--workers", help="odoo.conf workers (default: threaded)."),
+    ] = None,
     apply_changes: Annotated[bool, typer.Option("--apply", help=_APPLY_HELP)] = False,
 ) -> None:
     """Create an Odoo stack: render compose/.env/odoo.conf, start it, wait for health."""
@@ -63,14 +97,27 @@ def create(
     try:
         instance_name = validate_instance_name(name)
         stack_dir = instance_dir(container.config, instance_name, dir_opt)
-        port = resolve_create_port(
-            system=container.system,
-            config=container.config,
-            fs=container.fs,
-            stack_dir=stack_dir,
-            requested=http_port,
-            registry_path=container.registry_path,
+        manifest = load_manifest(container.fs, stack_dir)
+        extras = StackExtras(
+            ingress_network=ingress_network,
+            ingress_alias=ingress_alias,
+            memory_limit=memory,
+            cpus=cpus,
+            proxy_mode=proxy_mode,
+            workers=workers,
         )
+        effective = resolve_stack_extras(manifest, extras)
+        if effective.ingress_network is not None and http_port is None:
+            port = manifest.http_port if manifest is not None else 0
+        else:
+            port = resolve_create_port(
+                system=container.system,
+                config=container.config,
+                fs=container.fs,
+                stack_dir=stack_dir,
+                requested=http_port,
+                registry_path=container.registry_path,
+            )
         plan = create_instance_plan(
             name=instance_name,
             stack_dir=stack_dir,
@@ -81,22 +128,35 @@ def create(
             docker=container.docker,
             fs=container.fs,
             registry_path=container.registry_path,
+            extras=extras,
         )
     except OdooInstallerError as exc:
         error(str(exc))
         raise typer.Exit(code=1) from None
 
     if not apply_changes:
-        render_plan(plan.steps, f"Instance create plan: {plan.name} (http port {plan.http_port})")
+        where = (
+            f"ingress alias {plan.extras.ingress_alias or plan.name!r} "
+            f"on {plan.extras.ingress_network}"
+            if plan.extras.ingress_network
+            else f"http port {plan.http_port}"
+        )
+        render_plan(plan.steps, f"Instance create plan: {plan.name} ({where})")
         return
     try:
         apply_steps(plan.steps, on_step=progress_reporter())
     except OdooInstallerError as exc:
         error(str(exc))
         raise typer.Exit(code=1) from None
-    console.print(
-        f"[green]✔[/green] instance {plan.name!r} ready at http://localhost:{plan.http_port}"
-    )
+    if plan.extras.ingress_network:
+        console.print(
+            f"[green]✔[/green] instance {plan.name!r} ready on ingress network "
+            f"{plan.extras.ingress_network!r} (alias {plan.extras.ingress_alias or plan.name})"
+        )
+    else:
+        console.print(
+            f"[green]✔[/green] instance {plan.name!r} ready at http://localhost:{plan.http_port}"
+        )
 
 
 @app.command("list")
@@ -155,7 +215,17 @@ def show(
         f"postgres {manifest.pg_tag}"
     )
     console.print(f"  directory: {manifest.dir}")
-    console.print(f"  http port: {manifest.http_port}")
+    if manifest.ingress_network:
+        console.print(
+            f"  ingress:   alias {manifest.ingress_alias or manifest.name} on "
+            f"{manifest.ingress_network} (no host port)"
+        )
+    else:
+        console.print(f"  http port: {manifest.http_port}")
+    if manifest.memory_limit or manifest.cpus:
+        limits = f"memory {manifest.memory_limit}" if manifest.memory_limit else ""
+        limits += (", " if limits else "") + (f"cpus {manifest.cpus}" if manifest.cpus else "")
+        console.print(f"  limits:    {limits}")
     console.print(f"  adopted:   {'yes' if manifest.adopted else 'no'}")
     if not reachable:
         console.print("[yellow]⚠ stack is not reachable via the container runtime[/yellow]")
@@ -175,6 +245,60 @@ def _containers_for(
         return container.docker.compose_containers(stack_dir), True
     except OdooInstallerError:
         return [], False
+
+
+@app.command("health")
+def health(
+    name: str,
+    *,
+    wait: Annotated[
+        int,
+        typer.Option("--wait", help="Poll up to this many seconds before reporting."),
+    ] = 0,
+    as_json: Annotated[
+        bool,
+        typer.Option("--json", help="Print machine-readable JSON instead of rich text."),
+    ] = False,
+) -> None:
+    """Probe the instance: HTTP /web/health (published) or the container healthcheck."""
+    container = deps.build()
+    try:
+        stack_dir = _stack_dir_for(container, name)
+        manifest = load_manifest(container.fs, stack_dir)
+        if manifest is None:
+            raise StackError(f"no manifest for instance {name!r} in {stack_dir}")
+        healthy, detail = instance_health(manifest, container.docker, wait_s=wait)
+    except OdooInstallerError as exc:
+        error(str(exc))
+        raise typer.Exit(code=1) from None
+    if as_json:
+        typer.echo(json.dumps({"instance": name, "healthy": healthy, "detail": detail}, indent=2))
+    elif healthy:
+        console.print(f"[green]✔ healthy[/green] {name}: {detail}")
+    else:
+        console.print(f"[red]✘ unhealthy[/red] {name}: {detail}")
+    if not healthy:
+        raise typer.Exit(code=1)
+
+
+@app.command("logs")
+def logs(
+    name: str,
+    *,
+    tail: Annotated[int, typer.Option("--tail", help="Number of lines to show.")] = 80,
+) -> None:
+    """Show the stack's combined service logs (compose logs --tail)."""
+    container = deps.build()
+    try:
+        stack_dir = _stack_dir_for(container, name)
+        manifest = load_manifest(container.fs, stack_dir)
+        if manifest is None:
+            raise StackError(f"no manifest for instance {name!r} in {stack_dir}")
+        output = container.docker.compose(["logs", "--tail", str(tail)], stack_dir)
+    except OdooInstallerError as exc:
+        error(str(exc))
+        raise typer.Exit(code=1) from None
+    typer.echo(output or "(no logs)")
 
 
 @app.command("start")

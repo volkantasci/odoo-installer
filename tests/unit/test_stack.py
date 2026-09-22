@@ -60,3 +60,94 @@ def test_odoo_conf_has_addons_path_and_master_password() -> None:
 def test_parse_env_ignores_comments_blanks_and_invalid_lines() -> None:
     assert parse_env("# comment\nA=1\n\nB = two\nBAD\n") == {"A": "1", "B": "two"}
     assert parse_env("") == {}
+
+
+def test_compose_yaml_filestore_is_a_named_volume() -> None:
+    content = compose_yaml(PARAMS)
+    # named volume (not an anonymous image volume): survives plain `down`,
+    # removed by `down -v`, and reachable for exec-based backup streams
+    assert "- filestore:/var/lib/odoo" in content
+    assert "filestore:" in content.split("volumes:")[1]
+
+
+def test_compose_yaml_ingress_mode_publishes_no_port() -> None:
+    ingress = compose_yaml(
+        StackParams(
+            name="acme",
+            odoo_image="odoo:19.0",
+            pg_tag=17,
+            http_port=0,
+            pg_password="pgsecret",
+            admin_passwd="adminsecret",
+            ingress_network="violetear-ingress",
+            ingress_alias="acme",
+        )
+    )
+    assert "ports:" not in ingress
+    assert "aliases:" in ingress
+    assert "- acme" in ingress
+    assert "external: true" in ingress
+    assert "name: violetear-ingress" in ingress
+    # web keeps the default network too (it must reach db); db never joins ingress
+    assert "default: {}" in ingress
+    services_section = ingress.split("\nvolumes:")[0]
+    db_block = services_section.split("\n  db:")[1]
+    assert "ingress" not in db_block
+
+
+def test_compose_yaml_resource_limits() -> None:
+    limited = compose_yaml(
+        StackParams(
+            name="acme",
+            odoo_image="odoo:19.0",
+            pg_tag=17,
+            http_port=8069,
+            pg_password="pgsecret",
+            admin_passwd="adminsecret",
+            memory_limit="2g",
+            cpus=1.5,
+        )
+    )
+    assert "mem_limit: 2g" in limited
+    assert "cpus: 1.5" in limited
+
+
+def test_odoo_conf_workers_and_flags() -> None:
+    tuned = odoo_conf(
+        StackParams(
+            name="acme",
+            odoo_image="odoo:19.0",
+            pg_tag=17,
+            http_port=0,
+            pg_password="pgsecret",
+            admin_passwd="adminsecret",
+            proxy_mode=True,
+            list_db=False,
+            workers=4,
+        )
+    )
+    assert "proxy_mode = True" in tuned
+    assert "list_db = False" in tuned
+    assert "workers = 4" in tuned
+    # default PARAMS keep the classic values
+    classic = odoo_conf(PARAMS)
+    assert "proxy_mode = False" in classic
+    assert "list_db = True" in classic
+    assert "workers" not in classic
+
+
+def test_env_file_carries_odoo_admin_credentials() -> None:
+    content = env_file(
+        StackParams(
+            name="acme",
+            odoo_image="odoo:19.0",
+            pg_tag=17,
+            http_port=8069,
+            pg_password="pgsecret",
+            admin_passwd="adminsecret",
+            odoo_login="admin",
+            odoo_password="odoosecret",
+        )
+    )
+    assert "ODOO_ADMIN_LOGIN=admin" in content
+    assert "ODOO_ADMIN_PASSWORD=odoosecret" in content

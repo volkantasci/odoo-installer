@@ -41,6 +41,7 @@ from odoo_installer.core.modules import (
     module_remove_plan,
     recreate_web_service,
     resolve_dependencies,
+    upgrade_repos_plan,
 )
 from odoo_installer.core.plan import apply_steps
 from odoo_installer.core.runner import install_modules
@@ -529,6 +530,46 @@ def upgrade(
         upgrade=True,
         allow_untested=allow_untested,
         resolve_deps=resolve_deps,
+    )
+
+
+@app.command("upgrade-repos")
+def upgrade_repos(
+    *,
+    instance: Annotated[str | None, typer.Option("--instance", help=_INSTANCE_HELP)] = None,
+    apply_changes: Annotated[bool, typer.Option("--apply", help=_APPLY_HELP)] = False,
+) -> None:
+    """Refresh mounted OCA repos to the tip of their branch. Dry-run by default.
+
+    Reports which mounted modules changed between commits and recreates the web
+    service when something moved. Applying the change INSIDE Odoo stays explicit:
+    run `module upgrade <changed> --db ...` with the printed list.
+    """
+    container = deps.build()
+    try:
+        manifest = resolve_instance(container, instance)
+        if not manifest.repos:
+            raise OdooInstallerError(f"instance {manifest.name!r} has no mounted OCA repos")
+        steps = upgrade_repos_plan(
+            manifest=manifest,
+            git=container.git,
+            fs=container.fs,
+            docker=container.docker,
+        )
+    except OdooInstallerError as exc:
+        error(str(exc))
+        raise typer.Exit(code=1) from None
+    if not apply_changes:
+        render_plan(steps, f"Repo upgrade plan: {manifest.name}")
+        return
+    try:
+        apply_steps(steps, on_step=progress_reporter())
+    except OdooInstallerError as exc:
+        error(str(exc))
+        raise typer.Exit(code=1) from None
+    console.print(
+        "[dim]next: `module upgrade <changed modules> --db <db>` applies the code "
+        "changes inside Odoo[/dim]"
     )
 
 

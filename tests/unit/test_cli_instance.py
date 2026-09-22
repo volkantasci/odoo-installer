@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest import mock
 
 import pytest
 from fakes import FakeDocker, FakeFs, FakeGit, FakeGitHub, FakeSystem
@@ -297,3 +298,110 @@ def test_remove_unknown_instance_fails(patch_deps, tmp_path: Path) -> None:
     result = runner.invoke(app, ["instance", "remove", "ghost"])
     assert result.exit_code == 1
     assert "not registered" in result.output
+
+
+def test_create_ingress_mode_publishes_no_port(patch_deps, tmp_path: Path) -> None:
+    container = make_container(tmp_path)
+    patch_deps(container)
+    result = runner.invoke(
+        app,
+        [
+            "instance",
+            "create",
+            "acme",
+            "--apply",
+            "--ingress-network",
+            "violetear-ingress",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    compose = (tmp_path / "instances" / "acme" / "docker-compose.yml").read_text()
+    assert "ports:" not in compose
+    assert "violetear-ingress" in compose
+    assert "- acme" in compose  # alias defaults to the instance name
+    conf = (tmp_path / "instances" / "acme" / "config" / "odoo.conf").read_text()
+    assert "proxy_mode = True" in conf  # ingress implies proxy_mode
+    assert "ready on ingress network" in result.output
+    entry = json.loads(runner.invoke(app, ["instance", "list", "--json"]).stdout)[0]
+    assert entry["http_port"] == 0
+
+
+def test_create_ingress_rerun_pins_state(patch_deps, tmp_path: Path) -> None:
+    container = make_container(tmp_path)
+    patch_deps(container)
+    first = runner.invoke(
+        app, ["instance", "create", "acme", "--apply", "--ingress-network", "ing"]
+    )
+    assert first.exit_code == 0, first.output
+    second = runner.invoke(app, ["instance", "create", "acme", "--apply"])
+    assert second.exit_code == 0, second.output
+    assert "already satisfied" in second.output
+    compose = (tmp_path / "instances" / "acme" / "docker-compose.yml").read_text()
+    assert "name: ing" in compose  # manifest fallback: no drift without flags
+
+
+def test_create_with_resources(patch_deps, tmp_path: Path) -> None:
+    container = make_container(tmp_path)
+    patch_deps(container)
+    result = runner.invoke(
+        app,
+        [
+            "instance",
+            "create",
+            "big",
+            "--apply",
+            "--memory",
+            "2g",
+            "--cpus",
+            "1.5",
+            "--workers",
+            "4",
+            "--no-proxy-mode",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    compose = (tmp_path / "instances" / "big" / "docker-compose.yml").read_text()
+    assert "mem_limit: 2g" in compose
+    assert "cpus: 1.5" in compose
+    conf = (tmp_path / "instances" / "big" / "config" / "odoo.conf").read_text()
+    assert "workers = 4" in conf
+
+
+def test_health_json_and_exit_codes(patch_deps, tmp_path: Path) -> None:
+    container = make_container(tmp_path)
+    patch_deps(container)
+    runner.invoke(app, ["instance", "create", "dev", "--apply"])
+    with mock.patch("odoo_installer.core.health._http_get", return_value=(200, "GET -> 200")):
+        ok = runner.invoke(app, ["instance", "health", "dev", "--json"])
+    assert ok.exit_code == 0, ok.output
+    payload = json.loads(ok.stdout)
+    assert payload == {
+        "instance": "dev",
+        "healthy": True,
+        "detail": "GET http://localhost:8069/web/health -> 200",
+    }
+    with mock.patch("odoo_installer.core.health._http_get", return_value=(0, "connection refused")):
+        bad = runner.invoke(app, ["instance", "health", "dev", "--json"])
+    assert bad.exit_code == 1
+    assert json.loads(bad.stdout)["healthy"] is False
+
+
+def test_health_ingress_uses_container_probe(patch_deps, tmp_path: Path) -> None:
+    container = make_container(tmp_path)
+    patch_deps(container)
+    runner.invoke(app, ["instance", "create", "acme", "--apply", "--ingress-network", "ing"])
+    result = runner.invoke(app, ["instance", "health", "acme", "--json"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["healthy"] is True
+    assert "dev-web-1".replace("dev", "acme") in payload["detail"]
+
+
+def test_logs_command_maps_to_compose(patch_deps, tmp_path: Path) -> None:
+    container = make_container(tmp_path)
+    patch_deps(container)
+    runner.invoke(app, ["instance", "create", "dev", "--apply"])
+    container.docker.compose_calls.clear()
+    result = runner.invoke(app, ["instance", "logs", "dev", "--tail", "20"])
+    assert result.exit_code == 0, result.output
+    assert container.docker.compose_calls[-1][0] == ("logs", "--tail", "20")

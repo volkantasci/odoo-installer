@@ -10,6 +10,7 @@ never has to care which runtime is underneath.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import shutil
@@ -53,7 +54,17 @@ class ComposeLike(Protocol):
     def compose_result(
         self, args: list[str], project_dir: Path, timeout_s: int = 300
     ) -> tuple[int, str]: ...
+    def compose_transfer(
+        self,
+        args: list[str],
+        project_dir: Path,
+        *,
+        stdin_path: Path | None = None,
+        stdout_path: Path | None = None,
+        timeout_s: int = 1800,
+    ) -> None: ...
     def wait_healthy(self, container: str, timeout_s: int = 240, poll_s: int = 3) -> str: ...
+    def health_status(self, container: str) -> str: ...
     def logs(self, container: str, tail: int = 40) -> str: ...
     def compose_containers(self, working_dir: Path) -> list[ComposeContainerInfo]: ...
 
@@ -188,6 +199,50 @@ class ComposeAdapter:
             raise StackError(f"{self.runtime} compose {' '.join(args)}: timed out") from exc
         return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
 
+    def compose_transfer(
+        self,
+        args: list[str],
+        project_dir: Path,
+        *,
+        stdin_path: Path | None = None,
+        stdout_path: Path | None = None,
+        timeout_s: int = 1800,
+    ) -> None:
+        """Run a compose command with binary stdin/stdout wired to files.
+
+        Backups and restores stream through `compose exec -T` / `compose run`:
+        pg_dump writes to stdout, pg_restore/tar read from stdin. Files keep the
+        runtime's own uid mapping inside the container; the host side only sees
+        its own bytes, so no userns ownership gymnastics are ever needed.
+        """
+        cmd = [self.runtime, "compose", *args]
+        with contextlib.ExitStack() as stack:
+            stdin_file = (
+                stack.enter_context(open(stdin_path, "rb")) if stdin_path is not None else None
+            )
+            stdout_file = (
+                stack.enter_context(open(stdout_path, "wb")) if stdout_path is not None else None
+            )
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    cwd=project_dir,
+                    stdin=stdin_file if stdin_file is not None else subprocess.DEVNULL,
+                    stdout=stdout_file if stdout_file is not None else subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                )
+            except OSError as exc:
+                raise StackError(f"{self.runtime} compose {' '.join(args)}: {exc}") from exc
+            try:
+                _, stderr = proc.communicate(timeout=timeout_s)
+            except subprocess.TimeoutExpired as exc:
+                proc.kill()
+                proc.communicate()
+                raise StackError(f"{self.runtime} compose {' '.join(args)}: timed out") from exc
+        if proc.returncode != 0:
+            detail = (stderr or b"").decode(errors="replace").strip() or f"exit {proc.returncode}"
+            raise StackError(f"{self.runtime} compose {' '.join(args)}: {detail}")
+
     def wait_healthy(self, container: str, timeout_s: int = 240, poll_s: int = 3) -> str:
         """Poll the container healthcheck until healthy; attach logs on failure."""
         deadline = time.monotonic() + timeout_s
@@ -229,6 +284,22 @@ class ComposeAdapter:
             f"container {container} has no healthcheck to wait for "
             f"(only the web service of a created stack has one): {stderr}"
         )
+
+    def health_status(self, container: str) -> str:
+        """One-shot healthcheck status: healthy/unhealthy/starting (never waits)."""
+        proc = subprocess.run(
+            [self.runtime, "inspect", "-f", "{{.State.Health.Status}}", container],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise self._inspect_error(container, (proc.stderr or "").strip())
+        status = proc.stdout.strip()
+        if not status:
+            raise StackError(f"container {container} has no healthcheck")
+        return status
 
     def logs(self, container: str, tail: int = 40) -> str:
         proc = subprocess.run(

@@ -52,6 +52,7 @@ class FakeDocker:
         self.health_checks: list[str] = []
         self.logged: list[str] = []
         self.container_queries: list[Path] = []
+        self.transfer_inputs: list[tuple[tuple[str, ...], Path] | None] = []
 
     def remote_socket(self) -> str | None:
         if self.runtime != "podman":
@@ -82,6 +83,20 @@ class FakeDocker:
             return self.compose_result_results.pop(0)
         return 0, f"compose {' '.join(args)} ok"
 
+    def compose_transfer(
+        self,
+        args: list[str],
+        project_dir: Path,
+        *,
+        stdin_path: Path | None = None,
+        stdout_path: Path | None = None,
+        timeout_s: int = 1800,
+    ) -> None:
+        self.compose_calls.append((tuple(args), Path(project_dir)))
+        self.transfer_inputs.append((tuple(args), Path(stdin_path)) if stdin_path else None)
+        if stdout_path is not None:
+            stdout_path.write_bytes(f"fake stream for: {' '.join(args)}".encode())
+
     def compose_containers(self, working_dir: Path) -> list[ComposeContainerInfo]:
         self.container_queries.append(Path(working_dir))
         if self._containers_error is not None:
@@ -103,6 +118,12 @@ class FakeDocker:
         self.health_checks.append(container)
         if not self._healthy:
             raise StackError(f"container {container} not healthy")
+        return "healthy"
+
+    def health_status(self, container: str) -> str:
+        self.health_checks.append(container)
+        if not self._healthy:
+            return "unhealthy"
         return "healthy"
 
     def logs(self, container: str, tail: int = 40) -> str:
@@ -289,12 +310,14 @@ class FakeGit:
         self,
         *,
         commit: str = "abc1234def5678",
+        next_commit: str | None = None,
         existing: set[Path] | None = None,
         remote: str = "https://github.com/OCA/server-utils.git",
         branch: str | None = "19.0",
         sample_modules: tuple[str, ...] = (),
     ) -> None:
         self._commit = commit
+        self._next_commit = next_commit  # commit AFTER fetch+checkout (upgrade-repos)
         self._existing = existing or set()
         self._remote = remote
         self._branch = branch
@@ -332,10 +355,6 @@ class FakeGit:
         self._existing.add(target)
         return ""
 
-    def fetch(self, path: Path) -> str:
-        self.fetched.append(Path(path))
-        return ""
-
     def checkout(self, path: Path, ref: str) -> str:
         self.checkouts.append((Path(path), ref))
         return ""
@@ -362,3 +381,18 @@ class FakeGit:
 
     def active_branch(self, path: Path) -> str | None:
         return self._branch
+
+    def diff_names(self, path: Path, old: str, new: str) -> list[str]:
+        if old == new or self._next_commit is None:
+            return []
+        return [
+            f"{module}/{name}"
+            for module in self._sample_modules
+            for name in ("__manifest__.py", "models.py")
+        ]
+
+    def fetch(self, path: Path) -> str:
+        self.fetched.append(Path(path))
+        if self._next_commit is not None:
+            self._commit = self._next_commit  # like origin/19.0 moving ahead
+        return ""

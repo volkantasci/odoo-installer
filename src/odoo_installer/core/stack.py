@@ -12,14 +12,29 @@ TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 
 @dataclass(frozen=True)
 class StackParams:
-    """Everything the templates need; secrets are resolved by the caller."""
+    """Everything the templates need; secrets are resolved by the caller.
+
+    Fields beyond the classic five are optional (None/False defaults render the
+    same files as before), so existing callers and golden tests stay valid.
+    Ingress mode (network set, no published port) is how stacks attach to a
+    shared reverse-proxy network without exposing host ports.
+    """
 
     name: str
     odoo_image: str
     pg_tag: int
-    http_port: int
+    http_port: int  # 0 = unpublished (ingress mode)
     pg_password: str
     admin_passwd: str
+    ingress_network: str | None = None
+    ingress_alias: str | None = None
+    memory_limit: str | None = None  # compose mem_limit, e.g. "2g"
+    cpus: float | None = None
+    proxy_mode: bool = False
+    list_db: bool = True
+    workers: int | None = None
+    odoo_login: str = "admin"
+    odoo_password: str = ""
 
 
 def _environment() -> jinja2.Environment:
@@ -41,6 +56,10 @@ def compose_yaml(params: StackParams) -> str:
             odoo_image=params.odoo_image,
             pg_tag=params.pg_tag,
             http_port=params.http_port,
+            ingress_network=params.ingress_network,
+            ingress_alias=params.ingress_alias or params.name,
+            memory_limit=params.memory_limit,
+            cpus=params.cpus,
         )
     )
 
@@ -56,6 +75,8 @@ def env_file(params: StackParams) -> str:
             http_port=params.http_port,
             pg_password=params.pg_password,
             admin_passwd=params.admin_passwd,
+            odoo_login=params.odoo_login,
+            odoo_password=params.odoo_password,
         )
     )
 
@@ -67,6 +88,9 @@ def odoo_conf(params: StackParams) -> str:
         .render(
             admin_passwd=params.admin_passwd,
             pg_password=params.pg_password,
+            proxy_mode=params.proxy_mode,
+            list_db=params.list_db,
+            workers=params.workers,
         )
     )
 

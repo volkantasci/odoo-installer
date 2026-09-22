@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from odoo_installer.adapters.docker import ComposeLike, host_port_for
@@ -19,13 +19,20 @@ from odoo_installer.adapters.system import SystemLike
 from odoo_installer.config import load_registry, save_registry
 from odoo_installer.constants import ODOO_VERSION
 from odoo_installer.core.plan import Step
-from odoo_installer.core.stack import StackParams, compose_yaml, env_file, odoo_conf, parse_env
+from odoo_installer.core.stack import (
+    StackParams,
+    compose_yaml,
+    env_file,
+    odoo_conf,
+    parse_env,
+)
 from odoo_installer.exceptions import StackError
 from odoo_installer.schemas import (
     INSTANCE_NAME_PATTERN,
     GlobalConfig,
     InstanceManifest,
     RegistryEntry,
+    StackExtras,
 )
 
 MANIFEST_NAME = ".odoo-installer.json"
@@ -49,6 +56,7 @@ class InstancePlan:
     odoo_image: str
     pg_tag: int
     steps: list[Step]
+    extras: StackExtras = field(default_factory=StackExtras)
 
 
 def validate_instance_name(name: str) -> str:
@@ -184,6 +192,36 @@ def remove_registry_entry(registry_path: Path, name: str) -> None:
     save_registry(registry, registry_path)
 
 
+def resolve_stack_extras(
+    manifest: InstanceManifest | None, extras: StackExtras | None
+) -> StackExtras:
+    """Merge requested extras over the manifest's recorded values (re-runs don't drift).
+
+    Same precedence as ports and images: an explicit value wins; None falls back
+    to what the instance already runs; a fresh instance resolves defaults
+    (ingress implies proxy_mode = True).
+    """
+    base = (
+        StackExtras()
+        if manifest is None
+        else StackExtras(
+            ingress_network=manifest.ingress_network,
+            ingress_alias=manifest.ingress_alias,
+            memory_limit=manifest.memory_limit,
+            cpus=manifest.cpus,
+            proxy_mode=manifest.proxy_mode,
+            list_db=manifest.list_db,
+            workers=manifest.workers,
+        )
+    )
+    if extras is None:
+        return base.resolved()
+    merged = base.model_copy(
+        update={field: value for field, value in extras.model_dump().items() if value is not None}
+    )
+    return merged.resolved()
+
+
 def create_instance_plan(
     *,
     name: str,
@@ -195,6 +233,7 @@ def create_instance_plan(
     docker: ComposeLike,
     fs: FileSystemLike,
     registry_path: Path,
+    extras: StackExtras | None = None,
 ) -> InstancePlan:
     """Build the create plan. Resolves secrets from the existing .env if present."""
     manifest = load_manifest(fs, stack_dir)
@@ -203,9 +242,12 @@ def create_instance_plan(
             f"instance {name!r} at {stack_dir} was adopted, not created by the CLI; "
             "refusing to rewrite it"
         )
+    effective = resolve_stack_extras(manifest, extras)
     existing_env = _load_env(fs, stack_dir)
     pg_password = existing_env.get("POSTGRES_PASSWORD") or secrets.token_urlsafe(16)
     admin_passwd = existing_env.get("ADMIN_PASSWD") or secrets.token_urlsafe(16)
+    odoo_login = existing_env.get("ODOO_ADMIN_LOGIN") or effective.odoo_login
+    odoo_password = existing_env.get("ODOO_ADMIN_PASSWORD") or secrets.token_urlsafe(16)
 
     params = StackParams(
         name=name,
@@ -214,6 +256,15 @@ def create_instance_plan(
         http_port=http_port,
         pg_password=pg_password,
         admin_passwd=admin_passwd,
+        ingress_network=effective.ingress_network,
+        ingress_alias=effective.ingress_alias,
+        memory_limit=effective.memory_limit,
+        cpus=effective.cpus,
+        proxy_mode=bool(effective.proxy_mode),
+        list_db=bool(effective.list_db),
+        workers=effective.workers,
+        odoo_login=odoo_login,
+        odoo_password=odoo_password,
     )
 
     steps: list[Step] = []
@@ -245,7 +296,7 @@ def create_instance_plan(
         )
     )
     steps.append(_registry_step(registry_path, name, stack_dir, http_port))
-    steps.append(_manifest_step(fs, name, stack_dir, odoo_image, pg_tag, http_port))
+    steps.append(_manifest_step(fs, name, stack_dir, odoo_image, pg_tag, http_port, effective))
     steps.append(
         Step(
             description=f"start the stack (docker compose up -d, project {name!r})",
@@ -265,6 +316,7 @@ def create_instance_plan(
         odoo_image=odoo_image,
         pg_tag=pg_tag,
         steps=steps,
+        extras=effective,
     )
 
 
@@ -329,7 +381,10 @@ def _manifest_step(
     odoo_image: str,
     pg_tag: int,
     http_port: int,
+    extras: StackExtras | None = None,
 ) -> Step:
+    effective = (extras or StackExtras()).resolved()
+
     def run() -> str:
         existing = load_manifest(fs, stack_dir)
         manifest = existing or InstanceManifest(
@@ -343,6 +398,15 @@ def _manifest_step(
         manifest.image = odoo_image
         manifest.pg_tag = pg_tag
         manifest.http_port = http_port
+        manifest.ingress_network = effective.ingress_network
+        manifest.ingress_alias = (
+            effective.ingress_alias if effective.ingress_network else None
+        ) or (name if effective.ingress_network else None)
+        manifest.memory_limit = effective.memory_limit
+        manifest.cpus = effective.cpus
+        manifest.proxy_mode = bool(effective.proxy_mode)
+        manifest.list_db = bool(effective.list_db)
+        manifest.workers = effective.workers
         save_manifest(fs, manifest)
         return "updated" if existing is not None else "created"
 

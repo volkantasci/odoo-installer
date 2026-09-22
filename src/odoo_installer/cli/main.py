@@ -11,6 +11,8 @@ from typing import Annotated
 import typer
 
 from odoo_installer import __version__
+from odoo_installer.cli import apply as apply_cli
+from odoo_installer.cli import backup as backup_cli
 from odoo_installer.cli import config as config_cli
 from odoo_installer.cli import db as db_cli
 from odoo_installer.cli import doctor as doctor_cli
@@ -33,11 +35,13 @@ app = typer.Typer(
     help="Install, configure and manage Odoo 19.0 Docker stacks with OCA modules.",
 )
 
+app.add_typer(backup_cli.app, name="backup")
 app.add_typer(config_cli.app, name="config")
 app.add_typer(db_cli.app, name="db")
 app.add_typer(instance_cli.app, name="instance")
 app.add_typer(module_cli.app, name="module")
 app.add_typer(test_cli.app, name="test")
+app.command(name="apply")(apply_cli.apply)
 app.command(name="doctor")(doctor_cli.doctor)
 app.command(name="install")(install_cli.install)
 

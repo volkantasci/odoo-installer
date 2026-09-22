@@ -49,6 +49,9 @@ class GlobalConfig(BaseModel):
     port_range_end: int = PORT_ALLOCATION_END
     github_token_env: str = "GITHUB_TOKEN"
     tested_repo_url: str = ""
+    # shell command run after each successful backup create, with OII_BACKUP_DIR
+    # pointing at the fresh backup directory (offsite shipping, e.g. rclone)
+    backup_hook: str = ""
     # "auto" prefers podman (rootless-first), falls back to docker; an explicit
     # value requires that binary on PATH (adapters.docker.resolve_runtime).
     container_runtime: Literal["auto", "podman", "docker"] = "auto"
@@ -125,10 +128,49 @@ class RepoRecord(BaseModel):
 INSTANCE_NAME_PATTERN = r"^[a-z0-9][a-z0-9-]{0,31}$"
 
 
+class StackExtras(BaseModel):
+    """Optional rendering knobs shared by `instance create` and `oii apply`.
+
+    None values mean "not specified": the create flow falls back to the existing
+    manifest's values (re-runs never drift), and `proxy_mode`/`list_db` resolve
+    to their sensible defaults (ingress implies proxy_mode = True).
+    """
+
+    ingress_network: str | None = None
+    ingress_alias: str | None = None
+    memory_limit: str | None = None
+    cpus: float | None = None
+    proxy_mode: bool | None = None
+    list_db: bool | None = None
+    workers: int | None = None
+    odoo_login: str = "admin"
+
+    def resolved(self) -> StackExtras:
+        """Concrete values after defaulting (ingress implies proxy_mode).
+
+        The alias intentionally stays None when unset: rendering falls back to
+        the stack name, and the manifest stores the concrete alias.
+        """
+        return StackExtras(
+            ingress_network=self.ingress_network,
+            ingress_alias=self.ingress_alias,
+            memory_limit=self.memory_limit,
+            cpus=self.cpus,
+            proxy_mode=(
+                self.proxy_mode if self.proxy_mode is not None else self.ingress_network is not None
+            ),
+            list_db=True if self.list_db is None else self.list_db,
+            workers=self.workers,
+            odoo_login=self.odoo_login,
+        )
+
+
 class InstanceManifest(BaseModel):
     """Per-instance state file (.odoo-installer.json) inside the stack directory.
 
     Deliberately secret-free: credentials live only in .env and config/odoo.conf.
+    Optional rendering knobs (ingress/resources/settings) were added in 0.8.0;
+    manifests written by older versions load with their defaults unchanged.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -139,7 +181,7 @@ class InstanceManifest(BaseModel):
     odoo_version: str
     image: str
     pg_tag: int
-    http_port: int
+    http_port: int  # 0 = not published (ingress mode)
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     adopted: bool = False
     applied_steps: list[str] = Field(default_factory=list)
@@ -148,3 +190,14 @@ class InstanceManifest(BaseModel):
     db_service: str = "db"
     db_user: str = "odoo"
     repos: list[RepoRecord] = Field(default_factory=list)
+    # ingress mode: web joins this external network under this alias and no host
+    # port is published (reverse proxy routing, voslodoo/violetear style)
+    ingress_network: str | None = None
+    ingress_alias: str | None = None
+    # resource limits applied to the web service (compose mem_limit / cpus)
+    memory_limit: str | None = None
+    cpus: float | None = None
+    # odoo.conf knobs the CLI renders (None/False = template default)
+    proxy_mode: bool = False
+    list_db: bool = True
+    workers: int | None = None

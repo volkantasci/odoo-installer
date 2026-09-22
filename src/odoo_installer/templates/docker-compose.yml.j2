@@ -5,8 +5,16 @@ services:
     depends_on:
       db:
         condition: service_healthy
+{% if ingress_network %}
+    networks:
+      default: {}
+      ingress:
+        aliases:
+          - {{ ingress_alias }}
+{% else %}
     ports:
       - "{{ http_port }}:8069"
+{% endif %}
     environment:
       DB_HOST: db
       DB_PORT: "5432"
@@ -15,6 +23,13 @@ services:
     volumes:
       - ./config:/etc/odoo
       - ./addons/local:/mnt/extra-addons
+      - filestore:/var/lib/odoo
+{% if memory_limit %}
+    mem_limit: {{ memory_limit }}
+{% endif %}
+{% if cpus %}
+    cpus: {{ cpus }}
+{% endif %}
     command: ["odoo", "-c", "/etc/odoo/odoo.conf"]
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8069/web/health || exit 1"]
@@ -39,3 +54,11 @@ services:
 
 volumes:
   pgdata:
+  filestore:
+{% if ingress_network %}
+
+networks:
+  ingress:
+    external: true
+    name: {{ ingress_network }}
+{% endif %}

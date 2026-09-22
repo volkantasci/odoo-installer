@@ -487,16 +487,22 @@ Shipped since v0.1.0 (tracked in [CHANGELOG.md](CHANGELOG.md)): adopted-instance
 removal with volume support, `instance secret`, central whitelist repo (`test pull` +
 `module approve` + `tested_repo_url`), OCA dependency resolver (`--resolve-deps`),
 blob-filtered sparse clones, live `[i/n]` plan progress, two-language usage guides,
-PyPI releases (0.1.1 → 0.6.0).
+PyPI releases (0.1.1 → 0.6.0). **0.7.0**: podman-first runtime support (runtime-agnostic
+compose adapter, honest rootless doctor checks, boot survival via linger +
+podman-restart.service), the integration layer with a nightly/manual CI job, JSON
+outputs for instance/db. **0.8.0**: `oii apply` declarative desired state
+(odoo-stack.toml), backups (`backup create/list/verify/prune/restore`), ingress mode
+(external network + alias, no host port), resource limits, `instance health/logs`,
+`module upgrade-repos`, per-instance Odoo admin credentials applied via the ORM on
+first database initialization.
 
-1. **Integration test layer** (`tests/integration/`, marker `integration`) and the CI
-   docker job — the biggest open gap: automated end-to-end
-   `instance create → module add → module install → test module` on a throwaway stack,
-   run locally and in CI.
-2. `module upgrade-repos` — re-sync OCA clones to their recorded 19.0 branches.
-3. apt adapter validation on a real Debian/Ubuntu machine (D3's "later milestone").
-4. Backlog from §1 non-goals: DB backup/restore, SMTP setup wizard, reverse-proxy/TLS
-   generation.
+1. ~~Integration test layer~~ (landed 0.7.0) and ~~`module upgrade-repos`~~ (landed
+   0.8.0).
+2. apt adapter validation on a real Debian/Ubuntu machine (D3's "later milestone").
+3. Backlog from §1 non-goals: SMTP setup wizard, TLS certificate generation beyond
+   ingress-mode attachment, Odoo major-version upgrade orchestration.
+4. Control-plane hardening requests from violetear (the hosting service built on
+   this CLI): event-streaming apply progress, batch operations.
 
 ---
 
@@ -525,7 +531,7 @@ care rules in §7 exist because adopted stacks may be production.
 |------|------------|
 | Python 3.14 + pinned deps lag | floor stays 3.11; pin dev deps; venv may use an older interpreter |
 | Odoo weekly image tags drift | default `odoo:19.0`; `--image` override recorded in the manifest |
-| OCA branch moves fast (ocabot bumps) | manifest stores last synced commit; `module upgrade-repos` (deferred to v1.1) re-syncs |
+| OCA branch moves fast (ocabot bumps) | manifest stores last synced commit; `module upgrade-repos` (since 0.8.0) re-syncs |
 | Log parsing fragility | parser matched against recorded fixture logs from real runs; exit code is primary signal |
 | Destructive ops on production stacks | plan-first + `--yes`, explicit `--db`, adopted stacks read-mostly (only explicit removal mutates), scratch DB naming `oitest_*` |
 | GitHub rate limits | `GITHUB_TOKEN`/`GH_TOKEN` env support; graceful degradation to offline discovery |

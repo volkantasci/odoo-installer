@@ -5,6 +5,57 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-09-22
+
+### Added
+
+- **`oii apply` — declarative desired state.** An `odoo-stack.toml` describes one
+  instance end to end: stack knobs (`image`, `pg_tag`, `http_port` or `[ingress]`),
+  `[[repos]]` (OCA GitHub URLs, optional sparse module lists), `[databases.<name>]`
+  with `install` module lists, `[resources]` (memory/cpus) and `[settings]`
+  (proxy_mode/list_db/workers). `apply` converges the instance to the spec by
+  assembling the same idempotent plans the interactive commands use — stack
+  ensure, repo add/remove diff, database creation, module installs — and is safe
+  to re-run (second apply reports satisfied steps). Fresh stacks converge in two
+  phases: the repo/db/module detail is planned once the stack exists, because
+  those plans are built from the manifest. `--json` prints the plan. This is the
+  primitive a hosting control plane loops on.
+- **Backups: `oii backup create|list|verify|prune|restore`.** pg_dump `-Fc` +
+  filestore tar streamed through the runtime's own stdio (`compose exec -T`) —
+  container-uid-owned bytes never need host-side ownership fixes — plus a
+  checksummed `manifest.json` per backup. `restore` is plan-first `--apply --yes`:
+  stop web, recreate the db, pg_restore, swap the filestore via a throwaway
+  container, start, wait healthy — and refuses corrupted backups. `prune` keeps
+  the newest N (plan-first). Optional `backup_hook` config ships each backup
+  offsite (runs with `OII_BACKUP_DIR` set).
+- **Ingress mode.** `instance create --ingress-network NAME [--ingress-alias slug]`
+  (or the spec's `[ingress]`): the web service joins an external network under an
+  alias and publishes no host port — reverse-proxy routing, voslodoo/violetear
+  style. Implies `proxy_mode`. The db service never joins the ingress network.
+- **`instance health [--wait N] [--json]`** — HTTP `/web/health` for published
+  stacks, container healthcheck for ingress stacks. **`instance logs [--tail]`**.
+- **`module upgrade-repos`** (v1.1 roadmap item): fetch + checkout the tip of each
+  mounted repo's branch, record the new commits, report which mounted modules
+  changed between commits, and recreate the web service when something moved.
+  The in-Odoo upgrade stays explicit (`module upgrade <changed> --db ...`).
+- **Per-instance Odoo admin credentials.** `.env` now carries
+  `ODOO_ADMIN_LOGIN`/`ODOO_ADMIN_PASSWORD` (generated at create); apply's install
+  step passes them via `-r/-w` only for a database's FIRST initialization, so
+  later installs never reset a changed password.
+
+### Changed
+
+- **Filestore is a named compose volume** (`filestore:`) instead of the image's
+  anonymous volume: survives plain `down`, removed by `down -v`, and streams
+  cleanly for backups. Stacks created before 0.8.0 keep working; their Odoo
+  filestore data stays in the old anonymous volume until re-created (copy it
+  manually if it matters).
+- **Compose template**: `mem_limit`/`cpus` from `[resources]`; odoo.conf renders
+  `workers`, `proxy_mode`, `list_db`.
+- **`spec.http_port` (and `--http-port`) are requests**: apply validates them
+  against live ports and registry reservations (rootless podman's userspace
+  port forwarder would otherwise silently double-bind).
+
 ## [0.7.0] - 2026-09-22
 
 ### Added

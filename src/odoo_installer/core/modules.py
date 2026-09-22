@@ -1297,3 +1297,73 @@ def module_remove_plan(
         container_path=record.container_path,
         steps=steps,
     )
+
+
+def upgrade_repos_plan(
+    *,
+    manifest: InstanceManifest,
+    git: GitLike,
+    fs: FileSystemLike,
+    docker: ComposeLike,
+) -> list[Step]:
+    """Refresh every mounted repo to the tip of its branch (v1.1 roadmap item).
+
+    Fetch + checkout origin/<branch>, record the new commit in the manifest and
+    report which mounted modules changed between the commits. The web service is
+    recreated when anything moved. Applying the upgrade INSIDE Odoo (`odoo -u`)
+    stays explicit: run `module upgrade <changed modules> --db ...` with the
+    printed list.
+    """
+    steps: list[Step] = []
+    changed_modules: dict[str, list[str]] = {}
+
+    for record in manifest.repos:
+        host_path = Path(record.host_path)
+
+        def refresh(path: Path = host_path, rec: RepoRecord = record) -> str:
+            git.fetch(path)
+            ref = f"origin/{rec.branch}"
+            git.checkout(path, ref)
+            new_commit = git.current_commit(path)
+            if new_commit == rec.commit:
+                return f"{rec.repo}: already at {rec.commit[:12]}"
+            names = git.diff_names(path, rec.commit, new_commit) if rec.commit else []
+            touched = sorted(
+                {name.split("/", 1)[0] for name in names if "/" in name}
+                & (set(rec.modules) if rec.modules else _all_module_names(fs, path))
+            )
+            if touched:
+                changed_modules[rec.repo] = touched
+            current = load_manifest(fs, manifest.dir)
+            if current is not None:
+                for entry in current.repos:
+                    if entry.repo == rec.repo:
+                        entry.commit = new_commit
+                save_manifest(fs, current)
+            return f"{rec.repo}: {rec.commit[:12] or 'unknown'} -> {new_commit[:12]}" + (
+                f" (changed: {', '.join(touched)})" if touched else ""
+            )
+
+        steps.append(
+            Step(
+                description=f"refresh {record.repo} to origin/{record.branch}",
+                run=refresh,
+            )
+        )
+
+    def recreate_if_changed() -> str:
+        if not changed_modules:
+            return "skipped (no repo moved)"
+        return recreate_web_service(docker, manifest)
+
+    steps.append(
+        Step(
+            description="recreate the web service if any repo moved",
+            run=recreate_if_changed,
+        )
+    )
+    return steps
+
+
+def _all_module_names(fs: FileSystemLike, repo_path: Path) -> set[str]:
+    return set(discover_modules(fs, repo_path))

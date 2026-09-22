@@ -12,6 +12,13 @@ they ship, and share approvals across machines — with plan-first safety everyw
 - 🦭 **Podman-first, Docker-compatible** — every instance is a compose stack on your
   chosen runtime (`container_runtime = auto|podman|docker`, `auto` prefers rootless
   podman); Odoo is never installed natively.
+- 📄 **Declarative desired state** — `oii apply odoo-stack.toml` converges an
+  instance end to end: stack, OCA repos, databases, installed modules. Idempotent,
+  `--json` plannable, safe to loop (built for hosting control planes).
+- 💾 **Backups built in** — `oii backup create/verify/restore/prune`: streamed
+  pg_dump + filestore with checksums; restore is plan-first and gated.
+- 🌐 **Ingress mode** — attach instances to a reverse-proxy network by alias, no
+  host ports, resource limits and odoo.conf knobs per instance.
 - 📋 **Plan-first safety** — every mutation prints its exact plan (live `[i/n]`
   progress) and runs only with `--apply` — plus `--yes` when destructive.
 - 🌿 **Correct OCA branches** — `origin/19.0` is verified via the GitHub API before

@@ -7,5 +7,8 @@ db_user = odoo
 db_password = {{ pg_password }}
 addons_path = /mnt/extra-addons
 data_dir = /var/lib/odoo
-list_db = True
-proxy_mode = False
+list_db = {{ 'True' if list_db else 'False' }}
+proxy_mode = {{ 'True' if proxy_mode else 'False' }}
+{%- if workers is not none %}
+workers = {{ workers }}
+{%- endif %}

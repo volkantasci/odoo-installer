@@ -183,7 +183,8 @@ oii config path
 | `default_pg_tag` | `17` | postgres image tag |
 | `port_range_start` / `port_range_end` | `8069` / `8099` | auto-allocation range (≥ 1024) |
 | `github_token_env` | `GITHUB_TOKEN` | env var holding a GitHub token |
-| `tested_repo_url` | *(empty)* | central whitelist repo (see §4.7) |
+| `tested_repo_url` | *(empty)* | central whitelist repo (see §4.9) |
+| `backup_hook` | *(empty)* | shell command run after each backup create, with `OII_BACKUP_DIR` set (offsite shipping) |
 | `container_runtime` | `auto` | `auto`, `podman` or `docker` (`auto` prefers podman) |
 
 Unknown keys are rejected; `set` validates values; `edit` validates the result and
@@ -225,18 +226,35 @@ Renders the stack, starts it, waits for `/web/health`, registers the instance.
   `.env` (`ADMIN_PASSWD`) — the official odoo image provides it through no
   environment variable, and the database manager never pre-fills the field.
 
-#### List / show / secret / lifecycle
+#### List / show / health / logs / secret / lifecycle
 
 ```bash
-oii instance list
-oii instance show <name>
+oii instance list [--json]
+oii instance show <name> [--json]
+oii instance health <name> [--wait N] [--json]
+oii instance logs <name> [--tail N]
 oii instance secret <name> [--key KEY]
 oii instance start|stop|restart <name>
 ```
 
 `secret` prints one value from the instance's `.env` on its own line (default:
-`ADMIN_PASSWD` — the master password; e.g. `--key POSTGRES_PASSWORD`). Unknown keys
-are a hard error listing the available keys.
+`ADMIN_PASSWD` — the master password; e.g. `--key POSTGRES_PASSWORD`, or
+`--key ODOO_ADMIN_PASSWORD` for the app admin password apply sets on first
+init). Unknown keys are a hard error listing the available keys. `health`
+probes HTTP `/web/health` for published stacks and the container healthcheck
+for ingress-mode stacks; it exits 1 when unhealthy and `--wait N` polls.
+
+#### Ingress mode (reverse-proxy routing)
+
+```bash
+oii instance create <name> --ingress-network NAME [--ingress-alias slug] [..]
+```
+
+The web service joins the external network under the alias and publishes **no
+host port** — a reverse proxy (Caddy/nginx) on that network routes to the
+alias. Implies `proxy_mode`. The db service never joins the ingress network.
+Resource limits: `--memory 2g --cpus 1.5`; odoo.conf: `--workers N`,
+`--proxy-mode/--no-proxy-mode`.
 
 #### Remove
 
@@ -415,7 +433,98 @@ For modules whose quality is already proven on a running stack: refuses anything
 in `installed` state in `--db`, then records the entries in the whitelist — no test
 log required.
 
-### 4.7 `test` — batch testing and central sync
+#### Refresh mounted repos
+
+```bash
+oii module upgrade-repos [--instance NAME] [--apply]
+```
+
+Fetches and checks out the tip of each mounted repo's branch, records the new
+commits, reports which mounted modules changed between the old and new commits,
+and recreates the web service when something moved (dry-run by default). The
+upgrade INSIDE Odoo stays explicit: run `module upgrade <changed> --db ...`
+with the printed list.
+
+### 4.7 `backup` — database + filestore
+
+```bash
+oii backup create [--instance NAME] [--db DB]
+oii backup list [--instance NAME] [--json]
+oii backup verify [--instance NAME] [--backup TS]
+oii backup prune [--instance NAME] [--keep N] [--apply]
+oii backup restore <TS> [--instance NAME] [--apply] [--yes]
+```
+
+`create` streams a consistent snapshot now (pg_dump is MVCC-consistent while
+Odoo serves): `pg_dump -Fc` + a filestore tar + a checksummed `manifest.json`
+into `<stack>/backups/<timestamp>/`. Everything streams through the runtime's
+own stdio (`compose exec -T`), so container-uid-owned filestore bytes never
+need host-side ownership fixes. The database defaults to the instance's only
+Odoo database; several databases require `--db`. An optional `backup_hook`
+config entry ships each backup offsite — it runs with `OII_BACKUP_DIR` pointing
+at the fresh backup directory.
+
+`verify` recomputes the checksums (exit 1 on any mismatch). `prune` keeps the
+newest `--keep` backups (plan-first). `restore` is plan-first and destructive:
+stop web, drop+recreate the database, `pg_restore`, replace the filestore via a
+throwaway container, start, wait healthy — execution requires `--apply --yes`,
+and corrupted backups are refused outright.
+
+### 4.8 `apply` — declarative desired state
+
+```bash
+oii apply <odoo-stack.toml> [--apply] [--json]
+```
+
+The spec file describes ONE instance end to end; apply converges the instance
+to it by assembling the same idempotent plans the interactive commands use, and
+re-running on a converged spec reports satisfied steps:
+
+```toml
+name = "acme"                    # instance name (also the compose project)
+image = "odoo:19.0"              # optional (default)
+pg_tag = 17                      # optional (config default)
+http_port = 8069                 # OR an [ingress] block — never both
+admin_login = "admin"            # Odoo admin login (password generated to .env)
+
+[ingress]                        # reverse-proxy mode: no published host port
+network = "violetear-ingress"    # external compose network
+alias = "acme"                   # network alias (default: the name)
+
+[resources]
+memory = "2g"                    # compose mem_limit
+cpus = 2.0                       # compose cpus
+
+[settings]                       # odoo.conf knobs
+proxy_mode = true                # implied by [ingress]
+list_db = false
+workers = 4
+
+[[repos]]                        # OCA repos (branch is always 19.0)
+url = "https://github.com/OCA/web.git"
+modules = ["web_environment_ribbon"]   # sparse clone list (omit: whole repo)
+
+[databases.acme]                 # each database gets a table
+install = ["base", "sale", "web_environment_ribbon"]
+allow_untested = false           # escape hatch for the tested-only gate
+```
+
+Semantics worth knowing:
+
+- `http_port` is a **request** — it must be free on the wire and not reserved
+  by another registered instance (re-runs on the instance's own port are fine).
+- Repos are diffed against the manifest: new URLs get mounted, dropped repos
+  get unmounted and purged.
+- Module installs apply the same gates as `module install` (visibility +
+  tested-addons whitelist; core modules always allowed) — at run time, when the
+  stack is up and visibility is knowable. A fresh stack therefore converges in
+  two phases: the dry run shows repo/db/module work as one step, planned in
+  detail once the stack exists.
+- On a database's FIRST initialization the generated admin password
+  (`ODOO_ADMIN_PASSWORD` in `.env`) is applied via Odoo's ORM; later installs
+  never touch it again.
+
+### 4.9 `test` — batch testing and central sync
 
 ```bash
 oii test suite [--instance NAME] [--only REPO] [--modules m1,m2]

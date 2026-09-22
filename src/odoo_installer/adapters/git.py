@@ -24,6 +24,7 @@ class GitLike(Protocol):
     def remote_url(self, path: Path) -> str: ...
     def current_commit(self, path: Path) -> str: ...
     def active_branch(self, path: Path) -> str | None: ...
+    def diff_names(self, path: Path, old: str, new: str) -> list[str]: ...
 
 
 class GitAdapter:
@@ -104,6 +105,16 @@ class GitAdapter:
             cwd=path,
         )
         return None if branch == "HEAD" else branch
+
+    def diff_names(self, path: Path, old: str, new: str) -> list[str]:
+        """Paths changed between two commits (name-only, no blobs fetched)."""
+        out = self._run(
+            ["git", "diff", "--name-only", old, new],
+            f"diff {old}..{new} in {path}",
+            cwd=path,
+            timeout_s=120,
+        )
+        return [line.strip() for line in out.splitlines() if line.strip()]
 
     def _run(self, cmd: list[str], what: str, cwd: Path | None = None, timeout_s: int = 60) -> str:
         try:
