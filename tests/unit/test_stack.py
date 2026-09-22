@@ -126,13 +126,14 @@ def test_odoo_conf_workers_and_flags() -> None:
             workers=4,
         )
     )
-    assert "proxy_mode = True" in tuned
-    assert "list_db = False" in tuned
-    assert "workers = 4" in tuned
+    lines = [line for line in tuned.splitlines() if line.strip()]
+    assert "proxy_mode = True" in lines  # line-exact: never glued to another key
+    assert "list_db = False" in lines
+    assert "workers = 4" in lines
     # default PARAMS keep the classic values
     classic = odoo_conf(PARAMS)
-    assert "proxy_mode = False" in classic
-    assert "list_db = True" in classic
+    assert "proxy_mode = False" in classic.splitlines()
+    assert "list_db = True" in classic.splitlines()
     assert "workers" not in classic
 
 

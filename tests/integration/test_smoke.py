@@ -325,6 +325,9 @@ def test_apply_end_to_end(run, tmp_path: Path) -> None:
         """name = "e2e"
 http_port = 18069
 
+[settings]
+workers = 2
+
 [[repos]]
 url = "https://github.com/OCA/web.git"
 modules = ["web_environment_ribbon"]
