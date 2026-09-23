@@ -218,6 +218,10 @@ oii instance create <name> [--dir PATH] [--http-port N] [--image TAG]
 ```
 
 Renders the stack, starts it, waits for `/web/health`, registers the instance.
+A first-time create also clears any same-name leftovers (`compose down -v`)
+before starting: postgres never re-initializes an existing data dir, so a
+stale volume would keep an old password and crash-loop the new web container.
+Re-runs on an existing manifest never sweep (that would destroy data).
 
 - **Port:** first free port in the configured range — a *stopped* stack does not
   reserve its port, so two instances can share one; pin with `--http-port`.

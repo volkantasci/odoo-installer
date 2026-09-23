@@ -494,7 +494,8 @@ outputs for instance/db. **0.8.0**: `oii apply` declarative desired state
 (odoo-stack.toml), backups (`backup create/list/verify/prune/restore`), ingress mode
 (external network + alias, no host port), resource limits, `instance health/logs`,
 `module upgrade-repos`, per-instance Odoo admin credentials applied via the ORM on
-first database initialization.
+first database initialization. **0.8.1**: template and stale-volume fixes found by
+the first real deployment (see CHANGELOG).
 
 1. ~~Integration test layer~~ (landed 0.7.0) and ~~`module upgrade-repos`~~ (landed
    0.8.0).

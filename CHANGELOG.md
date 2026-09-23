@@ -5,6 +5,24 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1] - 2026-09-23
+
+### Fixed
+
+- **`odoo.conf` rendered `proxy_mode = Trueworkers = 2`** when `workers` was
+  set: a Jinja `{%- if %}` swallowed the newline and glued the two options onto
+  one line — Odoo aborted with `optparse.OptionValueError` before serving.
+  Found by the first real violetear deployment; the integration apply-spec now
+  sets `workers` so a broken conf can never pass a health gate again.
+- **Fresh creates sweep same-name leftovers before `up -d`.** A previous stack
+  with the same project name (died mid-create, or deleted without
+  `instance remove`) leaves containers/volumes behind — and postgres NEVER
+  re-initializes an existing data dir, so the old `POSTGRES_PASSWORD` silently
+  mismatched the freshly generated one and the web container crash-looped on
+  auth. First-time create now runs `compose down -v --remove-orphans` first;
+  manifest-backed re-runs never sweep (data-destructive). Found live on
+  rootless podman during the violetear acceptance run.
+
 ## [0.8.0] - 2026-09-22
 
 ### Added
