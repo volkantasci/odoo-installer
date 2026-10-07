@@ -37,7 +37,9 @@ they ship, and share approvals across machines — with plan-first safety everyw
 The development plan, architecture, decisions and milestones live in
 [DEVELOPMENT.md](DEVELOPMENT.md).
 
-Detailed usage guide: **[USAGE.md](USAGE.md)** (English) ·
+Documentation: **[docs/](docs/README.md)** — the multi-page guide
+(**[English](docs/en/README.md)** · **[Türkçe](docs/tr/README.md)**) — plus the
+single-page **[USAGE.md](USAGE.md)** (English) and
 **[USAGE.tr.md](USAGE.tr.md)** (Türkçe).
 
 ## Installation

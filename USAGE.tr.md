@@ -2,6 +2,9 @@
 
 > **0.6.0+ sürümleri içindir** · [English](USAGE.md) olarak da okuyabilirsiniz
 >
+> 🧭 **Çok sayfalı kılavuzu mu arıyorsunuz?** Bkz. [docs/tr/](docs/tr/README.md)
+> (English: [docs/en/](docs/en/README.md)).
+>
 > Mimari, tasarım kararları ve geliştirme planı [DEVELOPMENT.md](DEVELOPMENT.md)'dedir.
 
 `odoo-installer`, Odoo 19.0 filonuz için tek bir CLI'dır — Docker stack'lerini kurar ve

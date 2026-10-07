@@ -2,6 +2,9 @@
 
 > **Works with 0.6.0+** · Read this in [Türkçe](USAGE.tr.md)
 >
+> 🧭 **Looking for the multi-page guide?** See [docs/en/](docs/en/README.md)
+> (Türkçe: [docs/tr/](docs/tr/README.md)).
+>
 > Architecture, decisions and milestones live in [DEVELOPMENT.md](DEVELOPMENT.md).
 
 `odoo-installer` is one CLI for your Odoo 19.0 fleet — it creates and manages Docker
@@ -135,7 +138,7 @@ container, and record every PASS in the whitelist
 anything that is not whitelisted unless you pass `--allow-untested`. That is the
 contract: **only proven modules are installed.**
 
-The whitelist is also **portable** — see [§4.7](#47-test--batch-testing-and-central-sync):
+The whitelist is also **portable** — see [§4.9](#49-test--batch-testing-and-central-sync):
 a small git repo can carry approvals to every machine, and `module approve` records
 modules that are already proven on a running stack.
 
