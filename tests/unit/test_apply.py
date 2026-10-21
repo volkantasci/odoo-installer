@@ -59,6 +59,49 @@ def test_load_spec_rejects_bad_db_name(tmp_path: Path) -> None:
         load_spec(write_spec(tmp_path, 'name = "x"\n[databases."9bad"]\ninstall = []\n'))
 
 
+def test_load_spec_database_defaults(tmp_path: Path) -> None:
+    spec = load_spec(
+        write_spec(
+            tmp_path,
+            """
+name = "locale"
+
+[databases.locale_db]
+install = ["base"]
+
+[databases.locale_db.defaults]
+lang = "tr_TR"
+country = "TR"
+timezone = "Europe/Istanbul"
+currency = "TRY"
+""",
+        )
+    )
+    defaults = spec.databases["locale_db"].defaults
+    assert defaults is not None
+    assert (defaults.lang, defaults.country, defaults.timezone, defaults.currency) == (
+        "tr_TR",
+        "TR",
+        "Europe/Istanbul",
+        "TRY",
+    )
+
+
+def test_load_spec_rejects_invalid_database_defaults(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="invalid stack spec"):
+        load_spec(
+            write_spec(
+                tmp_path,
+                """
+name = "locale"
+
+[databases.locale_db.defaults]
+lang = "TURKISH"
+""",
+            )
+        )
+
+
 def test_load_spec_missing_file(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="cannot read stack spec"):
         load_spec(tmp_path / "nope.toml")

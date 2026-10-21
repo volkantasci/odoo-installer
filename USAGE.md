@@ -514,6 +514,12 @@ modules = ["web_environment_ribbon"]   # sparse clone list (omit: whole repo)
 [databases.acme]                 # each database gets a table
 install = ["base", "sale", "web_environment_ribbon"]
 allow_untested = false           # escape hatch for the tested-only gate
+
+[databases.acme.defaults]        # first init only; later applies never touch it
+lang = "tr_TR"                   # activate Odoo UI language + default partner lang
+country = "TR"                   # admin/company country
+timezone = "Europe/Istanbul"     # admin timezone
+currency = "TRY"                 # company currency
 ```
 
 Semantics worth knowing:
@@ -529,7 +535,10 @@ Semantics worth knowing:
   detail once the stack exists.
 - On a database's FIRST initialization the generated admin password
   (`ODOO_ADMIN_PASSWORD` in `.env`) is applied via Odoo's ORM; later installs
-  never touch it again.
+  never touch it again. The optional `defaults` table rides the same first-init
+  pass: language (UI + default partner language), country, timezone and company
+  currency are set once, so a customer can change them later without `apply`
+  overwriting the choice.
 
 ### 4.9 `test` — batch testing and central sync
 

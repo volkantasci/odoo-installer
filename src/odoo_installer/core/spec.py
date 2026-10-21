@@ -58,11 +58,31 @@ class RepoSpec(BaseModel):
         return repo_arg_from_url(self.url)
 
 
+class DatabaseDefaults(BaseModel):
+    """First-initialisation defaults for a fresh database.
+
+    Applied through Odoo's ORM only when Odoo creates the database. Re-applying
+    the spec never touches them, so customer/operator changes always win.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Odoo/XPG locale code, e.g. "tr_TR" or "en_US"
+    lang: str | None = Field(default=None, pattern=r"^[a-z]{2,3}(?:_[A-Z]{2})?(@[a-z]+)?$")
+    # ISO 3166-1 alpha-2 country code
+    country: str | None = Field(default=None, pattern=r"^[A-Z]{2}$")
+    # IANA timezone, e.g. "Europe/Istanbul" (validated against Odoo's list at runtime)
+    timezone: str | None = Field(default=None, min_length=1, max_length=64)
+    # ISO 4217 currency code, e.g. "TRY"
+    currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+
+
 class DatabaseSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     install: list[str] = Field(default_factory=list)
     allow_untested: bool = False
+    defaults: DatabaseDefaults | None = None
 
 
 class StackSpec(BaseModel):

@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Per-database first-initialisation defaults.** `oii apply` can now carry
+  `[databases.<name>.defaults]` with `lang`, `country`, `timezone` and
+  `currency`. On the database's first init only, the language is activated via
+  Odoo's `--load-language`, and the ORM sets the admin/company locale, country,
+  timezone, company currency and the default partner language. Later applies
+  never touch those values, so customer changes win. Unknown country/currency/
+  timezone values are skipped by the ORM rather than failing the install.
+
 ## [0.8.1] - 2026-09-23
 
 ### Fixed

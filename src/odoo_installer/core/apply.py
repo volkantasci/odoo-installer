@@ -40,7 +40,7 @@ from odoo_installer.core.modules import (
 )
 from odoo_installer.core.plan import Step
 from odoo_installer.core.runner import install_modules, set_admin_credentials
-from odoo_installer.core.spec import StackSpec, spec_to_extras
+from odoo_installer.core.spec import DatabaseDefaults, StackSpec, spec_to_extras
 from odoo_installer.exceptions import StackError
 from odoo_installer.schemas import GlobalConfig, InstanceManifest
 
@@ -224,6 +224,7 @@ def _rest_steps(
                     db=db_name,
                     modules=db_spec.install,
                     allow_untested=db_spec.allow_untested,
+                    defaults=db_spec.defaults,
                     tested_path=tested_path,
                 )
             )
@@ -272,6 +273,7 @@ def _install_step(
     db: str,
     modules: list[str],
     allow_untested: bool,
+    defaults: DatabaseDefaults | None,
     tested_path: Path,
 ) -> Step:
     """Install `modules` into `db`, verifying visibility + whitelist at run time.
@@ -317,19 +319,31 @@ def _install_step(
             manifest.web_service,
             db,
             modules,
+            load_language=defaults.lang if first_init and defaults is not None else None,
         )
         note = output or f"installed {', '.join(modules)} into {db!r}"
         if first_init:
             # Odoo initializes a fresh db with login/password admin/admin; the
-            # generated per-instance credentials are applied right after, via
-            # the ORM (a raw SQL write would bypass password hashing)
+            # generated per-instance credentials and locale defaults are applied
+            # right after, via the ORM (raw SQL would bypass password hashing)
             login = _secret_or(fs, stack_dir, "ODOO_ADMIN_LOGIN") or "admin"
             password = _secret_or(fs, stack_dir, "ODOO_ADMIN_PASSWORD")
             if password is not None:
                 set_admin_credentials(
-                    docker, manifest.dir, manifest.web_service, db, login, password
+                    docker,
+                    manifest.dir,
+                    manifest.web_service,
+                    db,
+                    login,
+                    password,
+                    lang=defaults.lang if defaults is not None else None,
+                    country=defaults.country if defaults is not None else None,
+                    timezone=defaults.timezone if defaults is not None else None,
+                    currency=defaults.currency if defaults is not None else None,
                 )
                 note += f"; admin login {login!r} password applied"
+                if defaults is not None and defaults.lang is not None:
+                    note += f"; defaults {defaults.lang}/{defaults.country or '-'}"
         return note
 
     return Step(
