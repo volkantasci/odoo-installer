@@ -12,8 +12,10 @@ is safe to re-run and to loop.
 from __future__ import annotations
 
 import contextlib
+import errno
 import fcntl
 import functools
+import shlex
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -83,7 +85,9 @@ def apply_lock(registry_path: Path, name: str) -> Iterator[None]:
     try:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
+        except OSError as exc:
+            if exc.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
+                raise
             raise StackError(f"another apply is running for {name}") from None
         yield
     finally:
@@ -366,7 +370,10 @@ def _install_step(
             )
             from odoo_installer.console import console
 
-            console.print(f"[yellow]{recreated.rstrip('; ')}[/yellow]")
+            console.print(
+                f"[yellow]interrupted first init of {db!r} found (pending marker): "
+                "dropping and re-creating the database for a clean first init[/yellow]"
+            )
             try:
                 force_drop_database(docker, manifest.dir, manifest.db_service, manifest.db_user, db)
                 create_database(docker, manifest.dir, manifest.db_service, manifest.db_user, db)
@@ -428,6 +435,7 @@ def _install_step(
             if staged and pw is not None:
                 output = install(["base"], load_language)
                 apply_defaults(pw)
+                marker["state"] = "applied"
                 set_marker(None)
                 apps = [m for m in modules if m != "base"]
                 if apps:
@@ -441,6 +449,7 @@ def _install_step(
                 if pw is None:
                     return note
                 apply_defaults(pw)
+                marker["state"] = "applied"
                 set_marker(None)
                 note += f"; admin login {login!r} password applied"
             if defaults is not None and defaults.lang is not None:
@@ -458,14 +467,19 @@ def _install_step(
             what = str(err) if isinstance(err, StackError) else f"{type(err).__name__}: {err}"
             if recreated:
                 what = f"{recreated}the redo failed: {what}"
+            if marker["state"] in ("applied", "cleared"):
+                # the real admin credentials are set: never drop (the owner may
+                # already have logged in); the next apply continues the install
+                raise StackError(
+                    f"{what}; database {db!r} has its admin credentials and defaults applied, "
+                    "so oii keeps it: the next apply continues the install"
+                ) from err
             try:
                 force_drop_database(docker, manifest.dir, manifest.db_service, manifest.db_user, db)
             except Exception as drop_err:
                 follow_up = {
                     "pending": "the pending first-init marker makes the next apply drop and "
                     "redo it",
-                    "cleared": "its admin credentials and defaults were already applied, so "
-                    "the next apply continues the install",
                 }.get(marker["state"], f"drop it manually before the next apply ({db!r})")
                 raise StackError(
                     f"{what}; database {db!r} could not be removed after the failed first "
@@ -491,16 +505,23 @@ def _refuse_if_logins(docker: ComposeLike, manifest: InstanceManifest, db: str) 
         error = f"could not read res_users_log ({exc})"
     if error is None:
         return
+    name = getattr(manifest, "name", "<instance>")
+    clear_sql = f'COMMENT ON DATABASE "{db}" IS NULL'
     clear = (
-        f"cd {manifest.dir} && docker compose exec -T {manifest.db_service} "
-        f"psql -U {manifest.db_user} -d postgres "
-        f"-c 'COMMENT ON DATABASE \"{db}\" IS NULL'"
+        f"cd {shlex.quote(str(manifest.dir))} && {docker.runtime} compose exec -T "
+        f"{shlex.quote(manifest.db_service)} psql -U {shlex.quote(manifest.db_user)} "
+        f"-d postgres -c {shlex.quote(clear_sql)}"
     )
     raise StackError(
         f"database {db!r} carries the pending first-init marker but oii cannot prove nobody "
         f"logged in ({error}), so oii will not drop it. Its admin credentials may still be "
-        "Odoo's default: verify them (reset the admin password if needed), then clear the "
-        f"marker with: {clear}"
+        "Odoo's default. To verify, try admin/admin; the intended credentials are printed by "
+        f"`oii instance secret {name} --key ODOO_ADMIN_LOGIN` and "
+        f"`oii instance secret {name} --key ODOO_ADMIN_PASSWORD`. If the database holds "
+        f"nothing of value, the preferred fix is `oii db drop {db} --instance {name} --apply "
+        "--yes`, then apply again. Otherwise reset the admin password and clear the marker "
+        f"with: {clear} (clearing the marker skips the first-init defaults: "
+        "lang/country/currency/timezone/base_url)"
     )
 
 

@@ -550,9 +550,12 @@ Semantics worth knowing:
   credentials are being applied the database carries the comment
   `oii:first-init-pending`; if apply was killed in that window, the next apply
   drops, re-creates and redoes the first init. That drop is guarded: it runs
-  only when `res_users_log` counts exactly 0 rows (nobody, and no RPC client,
-  ever logged in); otherwise apply refuses and prints the psql command that
-  clears the marker after you verified the admin credentials. Databases with tables but no
+  only when `res_users_log` counts exactly 0 rows (no recorded login: login
+  page or authenticate; direct RPC with a password or API key leaves no row, so
+  this guard cannot see it); otherwise apply refuses and prints the psql command that
+  clears the marker after you verified the admin credentials. oii never drops a database whose real admin credentials were already
+  applied: a failure after that point (e.g. the apps install) keeps the database
+  and the next apply continues the install. Databases with tables but no
   Odoo registry are never initialised or dropped. Note that the real admin
   credentials are valid while the apps install, so a late apps-install failure
   drops a database whose owner may already have logged in; acceptable, since

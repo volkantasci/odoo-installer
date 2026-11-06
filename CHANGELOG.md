@@ -28,11 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rewrite also writes `config/.restart-pending`; it is removed once the restart
   succeeded (or was unnecessary), so a failed apply still restarts web on the
   next run.
-- **First init is all-or-nothing.** Any failure during a database's first init
-  (base install, defaults script, apps install; staged or not) drops the fresh
-  database and says so, so the next apply starts a clean first init instead of
-  leaving Odoo's default `admin`/`admin` login in place. If the drop itself
-  fails, the original error is kept and the drop failure is appended.
+- **First init is all-or-nothing until the defaults are applied.** A failure
+  before the real admin credentials and defaults were applied (base install,
+  defaults script; staged or not) drops the fresh database. Once they are
+  applied, a later failure (e.g. the staged apps install) never drops: the
+  next apply continues the install. The drop says so in the error, so the next
+  apply starts a clean first init instead of leaving Odoo's default
+  `admin`/`admin` login in place. If the drop itself fails, the original error is kept and the drop failure is appended.
 - **Interrupted first init is redone.** When the admin credentials are applied,
   the database carries the Postgres comment `oii:first-init-pending` from before
   the first Odoo command until the defaults script has committed. If apply died
@@ -40,8 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   re-creates the database and runs a clean first init in the same run.
 - **Pending marker is checked before the "already installed" shortcut**, and the
   redo never drops a database anyone has logged into: it requires
-  `res_users_log` to count exactly 0 and otherwise refuses with the psql command
-  that clears the marker. A failed redo says it was an interrupted first init.
+  `res_users_log` (recorded logins: login page / authenticate; direct RPC with a
+  password or API key leaves no row) to count exactly 0 and otherwise refuses,
+  explaining how to verify the credentials and giving the `oii db drop` command
+  or the psql command (built from the active container runtime) that clears the
+  marker. A failed redo says it was an interrupted first init.
 - **`oii apply --apply` takes an exclusive per-instance lock**; a concurrent
   run fails fast with "another apply is running for <name>".
 - **Fail-safe first-init detection.** A successful module-state query proves the

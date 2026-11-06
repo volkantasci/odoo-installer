@@ -464,7 +464,9 @@ def _run_install_step(
         )
 
     docker.compose_transfer = capture  # type: ignore[method-assign]
-    manifest = SimpleNamespace(dir=tmp_path, web_service="web", db_service="db", db_user="odoo")
+    manifest = SimpleNamespace(
+        name="acme", dir=tmp_path, web_service="web", db_service="db", db_user="odoo"
+    )
     monkeypatch.setattr(apply_mod, "load_manifest", lambda fs, d: manifest)
     monkeypatch.setattr(apply_mod, "available_modules", lambda fs, m: dict.fromkeys(modules, "x"))
     monkeypatch.setattr(apply_mod, "_states_safe", lambda *a, **k: None)
@@ -620,11 +622,11 @@ def test_failed_defaults_script_drops_the_half_initialised_database(
     assert "removed" in str(exc.value) and "shop" in str(exc.value)
 
 
-def test_failed_apps_install_in_staged_flow_drops_the_database(
+def test_failed_apps_install_after_defaults_keeps_the_database(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     docker = _FailingDocker("account")
-    with pytest.raises(StackError, match="boom in account"):
+    with pytest.raises(StackError, match="boom in account") as exc:
         _run_install_step(
             monkeypatch,
             tmp_path,
@@ -632,7 +634,20 @@ def test_failed_apps_install_in_staged_flow_drops_the_database(
             DatabaseDefaults(country="TR"),
             docker=docker,
         )
-    assert len(_drops(docker)) == 1
+    assert _drops(docker) == []
+    assert "next apply continues the install" in str(exc.value)
+
+
+def test_next_apply_after_a_late_apps_failure_just_installs_the_apps(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker = ScriptDocker({STATES_SQL: "base|installed\naccount|uninstalled", COMMENT_SQL: ""})
+    _run_real_detection(
+        monkeypatch, tmp_path, docker, ["base", "account"], DatabaseDefaults(country="TR")
+    )
+    trace = _trace(docker)
+    assert [t for t in trace if t.startswith("odoo")] == ["odoo -i base,account"]
+    assert not any("DROP" in t or "COMMENT ON" in t for t in trace)
 
 
 def test_failed_install_on_initialised_database_does_not_drop(
@@ -710,11 +725,11 @@ class ScriptDocker(FakeDocker):
 
 NO_RELATION = StackError('relation "ir_module_module" does not exist')
 REGISTRY_SQL = "table_name = 'ir_module_module'"
-TABLE_COUNT_SQL = "SELECT count(*)"
+TABLE_COUNT_SQL = "FROM information_schema.tables WHERE table_schema = 'public'"
 STATES_SQL = "FROM ir_module_module WHERE name IN"
 COMMENT_SQL = "shobj_description"
 PENDING = "oii:first-init-pending"
-LOGIN_COUNT_SQL = "FROM res_users_log"
+LOGIN_COUNT_SQL = "SELECT count(*) FROM res_users_log"
 
 
 def _run_real_detection(
@@ -731,7 +746,9 @@ def _run_real_detection(
 
     from odoo_installer.core import apply as apply_mod
 
-    manifest = SimpleNamespace(dir=tmp_path, web_service="web", db_service="db", db_user="odoo")
+    manifest = SimpleNamespace(
+        name="acme", dir=tmp_path, web_service="web", db_service="db", db_user="odoo"
+    )
     monkeypatch.setattr(apply_mod, "load_manifest", lambda fs, d: manifest)
     monkeypatch.setattr(apply_mod, "available_modules", lambda fs, m: dict.fromkeys(modules, "x"))
     monkeypatch.setattr(
@@ -1056,3 +1073,79 @@ def test_apply_lock_is_exclusive_per_instance(tmp_path: Path) -> None:
             pass
     with apply_lock(registry, "acme"):  # released afterwards
         pass
+
+
+def test_recovery_command_uses_the_adapters_runtime_and_quotes_data(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stack = tmp_path / "my stack"
+    stack.mkdir()
+    docker = ScriptDocker(_pending_rules(logins="3"))
+    docker.runtime = "podman"  # type: ignore[assignment]
+    with pytest.raises(StackError, match="will not drop it") as exc:
+        _run_real_detection(monkeypatch, stack, docker, ["base"], DatabaseDefaults())
+    msg = str(exc.value)
+    assert f"cd '{stack}' && podman compose exec -T db psql -U odoo -d postgres -c" in msg
+    assert "docker compose" not in msg
+    assert 'COMMENT ON DATABASE "shop" IS NULL' in msg
+    # recovery guidance
+    assert "admin/admin" in msg
+    assert "oii instance secret acme --key ODOO_ADMIN_PASSWORD" in msg
+    assert "oii db drop shop --instance acme --apply --yes" in msg
+    assert "skips the first-init defaults" in msg
+
+
+def test_lock_only_treats_would_block_as_another_apply(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import errno
+    import fcntl
+
+    from odoo_installer.core.apply import apply_lock
+
+    def broken(_handle: object, _op: int) -> None:
+        raise OSError(errno.ENOLCK, "No locks available")
+
+    monkeypatch.setattr(fcntl, "flock", broken)
+    with (
+        pytest.raises(OSError, match="No locks available"),
+        apply_lock(tmp_path / "registry.toml", "acme"),
+    ):
+        pass
+
+
+def test_cli_apply_holds_the_lock_for_plan_and_steps_but_dry_run_does_not(
+    monkeypatch: pytest.MonkeyPatch, patch_deps, tmp_path: Path
+) -> None:
+    from odoo_installer.cli import apply as cli_apply
+    from odoo_installer.core.apply import apply_lock
+
+    container = make_container(tmp_path)
+    patch_deps(container)
+    spec = write_spec(tmp_path, 'name = "locked"\nhttp_port = 18070\n')
+    seen: list[tuple[str, bool]] = []
+
+    def probe(label: str) -> None:
+        try:
+            with apply_lock(container.registry_path, "locked"):
+                seen.append((label, False))  # we could take it: nobody holds it
+        except StackError:
+            seen.append((label, True))
+
+    real_build, real_steps = cli_apply.build_apply_plan, cli_apply.apply_steps
+
+    def build(*args, **kwargs):  # type: ignore[no-untyped-def]
+        probe("plan")
+        return real_build(*args, **kwargs)
+
+    def steps(*args, **kwargs):  # type: ignore[no-untyped-def]
+        probe("steps")
+        return real_steps(*args, **kwargs)
+
+    monkeypatch.setattr(cli_apply, "build_apply_plan", build)
+    monkeypatch.setattr(cli_apply, "apply_steps", steps)
+    assert runner.invoke(app, ["apply", str(spec)]).exit_code == 0  # dry run
+    assert seen == [("plan", False)]
+    seen.clear()
+    assert runner.invoke(app, ["apply", str(spec), "--apply"]).exit_code == 0
+    assert seen == [("plan", True), ("steps", True)]
