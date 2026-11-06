@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import secrets
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -41,6 +42,7 @@ ENV_NAME = ".env"
 COMPOSE_NAME = "docker-compose.yml"
 ODOO_CONF_NAME = "odoo.conf"
 WEB_SERVICE = "web"
+RESTART_MARKER_NAME = ".restart-pending"
 RESTART_DESCRIPTION = "restart web to load the changed odoo.conf (only if the container was kept)"
 # .env is read only by the host-side docker compose (0600 is enough). config/odoo.conf
 # is mounted into the container and must be readable by its `odoo` user, which has a
@@ -299,13 +301,22 @@ def create_instance_plan(
             mode=_ENV_MODE,
         )
     )
+    conf_path = stack_dir / "config" / ODOO_CONF_NAME
+    marker_path = stack_dir / "config" / RESTART_MARKER_NAME
+    conf_text = odoo_conf(params)
+    conf_changed = manifest is not None and fs.read_text(conf_path) != conf_text
     steps.append(
         _write_step(
             fs,
-            stack_dir / "config" / ODOO_CONF_NAME,
-            odoo_conf(params),
+            conf_path,
+            conf_text,
             f"render config/{ODOO_CONF_NAME} (readable by the container, mode 0644)",
             mode=_CONF_MODE,
+            before_write=(
+                (lambda: fs.write_text(marker_path, "restart web to load odoo.conf\n"))
+                if manifest is not None
+                else None
+            ),
         )
     )
     steps.append(_registry_step(registry_path, name, stack_dir, http_port))
@@ -328,10 +339,10 @@ def create_instance_plan(
                 ),
             )
         )
-    conf_path = stack_dir / "config" / ODOO_CONF_NAME
     # `compose up -d` leaves a running container untouched when only the
-    # bind-mounted odoo.conf changed, so Odoo would keep the old settings.
-    restart_needed = manifest is not None and fs.read_text(conf_path) != odoo_conf(params)
+    # bind-mounted odoo.conf changed, so Odoo would keep the old settings. The
+    # marker file survives a failed apply so the next one still restarts.
+    restart_needed = manifest is not None and (conf_changed or fs.exists(marker_path))
     web_ids: dict[str, str] = {}
 
     def web_id() -> str:
@@ -355,9 +366,17 @@ def create_instance_plan(
 
         def restart_web() -> str:
             before, after = web_ids.get("before"), web_ids.get("after")
-            if not before or before != after:
-                return "web container was (re)created; odoo.conf already loaded"
-            return docker.compose(["restart", WEB_SERVICE], stack_dir, timeout_s=300) or "restarted"
+            if not before:
+                note = "web container was started by up -d; odoo.conf already loaded"
+            elif before != after:
+                note = "web container was recreated; odoo.conf already loaded"
+            else:
+                note = (
+                    docker.compose(["restart", WEB_SERVICE], stack_dir, timeout_s=300)
+                    or "restarted"
+                )
+            fs.remove_file(marker_path)
+            return note
 
         steps.append(Step(description=RESTART_DESCRIPTION, run=restart_web))
     steps.append(
@@ -404,10 +423,13 @@ def _write_step(
     content: str,
     description: str,
     mode: int | None = None,
+    before_write: Callable[[], None] | None = None,
 ) -> Step:
     def run() -> str:
         if fs.read_text(path) == content:
             return "unchanged"
+        if before_write is not None:
+            before_write()
         fs.write_text(path, content, mode)
         return f"written ({len(content)} bytes)"
 

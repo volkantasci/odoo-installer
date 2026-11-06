@@ -23,7 +23,14 @@ from odoo_installer.adapters.github import GitHubLike
 from odoo_installer.adapters.system import SystemLike
 from odoo_installer.config import get_tested_module
 from odoo_installer.constants import DEFAULT_ODOO_IMAGE
-from odoo_installer.core.dbms import create_database, force_drop_database, module_states
+from odoo_installer.core.dbms import (
+    FIRST_INIT_PENDING,
+    create_database,
+    database_comment,
+    force_drop_database,
+    module_states,
+    set_database_comment,
+)
 from odoo_installer.core.instances import (
     create_instance_plan,
     instance_dir,
@@ -312,7 +319,22 @@ def _install_step(
         states = _states_safe(docker, manifest, db, modules)
         if states is not None and all(states.get(m) == "installed" for m in modules):
             return f"{db!r}: all requested modules already installed"
-        first_init = not _db_initialized(docker, manifest, db)
+        # a successful module-state query proves Odoo's tables exist
+        initialized = states is not None or _db_initialized(docker, manifest, db)
+        recreated = ""
+        if initialized and (
+            database_comment(docker, manifest.dir, manifest.db_service, manifest.db_user, db)
+            == FIRST_INIT_PENDING
+        ):
+            # a previous first init was interrupted after Odoo created its tables
+            # but before the real credentials were set: redo it from scratch
+            force_drop_database(docker, manifest.dir, manifest.db_service, manifest.db_user, db)
+            create_database(docker, manifest.dir, manifest.db_service, manifest.db_user, db)
+            initialized = False
+            recreated = (
+                f"interrupted first init of {db!r} detected: database dropped and re-created; "
+            )
+        first_init = not initialized
         login = _secret_or(fs, stack_dir, "ODOO_ADMIN_LOGIN") or "admin"
         password = _secret_or(fs, stack_dir, "ODOO_ADMIN_PASSWORD") if first_init else None
         # Odoo picks the chart of accounts when `account` is installed, from the
@@ -349,9 +371,20 @@ def _install_step(
                     docker, manifest.dir, manifest.web_service, db, mods, load_language=language
                 )
 
+            def set_marker(comment: str | None) -> None:
+                set_database_comment(
+                    docker, manifest.dir, manifest.db_service, manifest.db_user, db, comment
+                )
+
+            # durable marker: if apply dies after Odoo created its tables (even
+            # SIGKILL) but before the real credentials are set, the next apply
+            # sees it and redoes the init instead of leaving admin/admin behind
+            if first_init and pw is not None:
+                set_marker(FIRST_INIT_PENDING)
             if staged and pw is not None:
                 output = install(["base"], load_language)
                 apply_defaults(pw)
+                set_marker(None)
                 apps = [m for m in modules if m != "base"]
                 if apps:
                     output = install(apps) or output
@@ -364,6 +397,7 @@ def _install_step(
                 if pw is None:
                     return note
                 apply_defaults(pw)
+                set_marker(None)
                 note += f"; admin login {login!r} password applied"
             if defaults is not None and defaults.lang is not None:
                 note += f"; defaults {defaults.lang}/{defaults.country or '-'}"
@@ -372,7 +406,7 @@ def _install_step(
         if not first_init:
             return first_init_sequence()
         try:
-            return first_init_sequence()
+            return recreated + first_init_sequence()
         except Exception as err:
             # Odoo already created its tables, so the next apply would see an
             # initialized database, skip the defaults and leave admin/admin on a
@@ -380,7 +414,7 @@ def _install_step(
             what = str(err) if isinstance(err, StackError) else f"{type(err).__name__}: {err}"
             try:
                 force_drop_database(docker, manifest.dir, manifest.db_service, manifest.db_user, db)
-            except StackError as drop_err:
+            except Exception as drop_err:
                 raise StackError(
                     f"{what}; database {db!r} could not be removed after the failed first "
                     f"init ({drop_err}); drop it manually before the next apply"
@@ -397,25 +431,36 @@ def _install_step(
 
 
 def _db_initialized(docker: ComposeLike, manifest: InstanceManifest, db: str) -> bool:
-    """True when Odoo already initialized the database (ir_module_module exists)."""
-    out = docker.compose(
-        [
-            "exec",
-            "-T",
-            manifest.db_service,
-            "psql",
-            "-U",
-            manifest.db_user,
-            "-d",
-            db,
-            "-At",
-            "-c",
-            "SELECT 1 FROM information_schema.tables "
-            "WHERE table_schema = 'public' AND table_name = 'ir_module_module'",
-        ],
-        manifest.dir,
+    """True when Odoo already initialized the database (ir_module_module exists).
+
+    Fails safe: unexpected psql output, or tables without an Odoo registry,
+    raise instead of guessing (a wrong "not initialized" can lead to a drop).
+    """
+
+    def query(sql: str) -> str:
+        return docker.compose(
+            [
+                "exec", "-T", manifest.db_service, "psql", "-U", manifest.db_user,
+                "-d", db, "-At", "-c", sql,
+            ],
+            manifest.dir,
+        ).strip()  # fmt: skip
+
+    registry = query(
+        "SELECT 1 FROM information_schema.tables "
+        "WHERE table_schema = 'public' AND table_name = 'ir_module_module'"
     )
-    return out.strip() == "1"
+    if registry == "1":
+        return True
+    if registry != "":
+        raise StackError(f"unexpected psql output while checking database {db!r}: {registry!r}")
+    tables = query("SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'")
+    if tables == "0":
+        return False
+    raise StackError(
+        f"database {db!r} has tables but no Odoo registry (psql said {tables!r}); "
+        "refusing to initialise or drop it"
+    )
 
 
 def _states_safe(

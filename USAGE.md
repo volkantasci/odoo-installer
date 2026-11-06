@@ -539,6 +539,23 @@ Semantics worth knowing:
   pass: language (UI + default partner language), country, timezone and company
   currency are set once, so a customer can change them later without `apply`
   overwriting the choice.
+- `defaults.base_url` is an origin only (`https://acme.example.com`, no path, no
+  trailing slash). It becomes `web.base.url`, is frozen on first init, and
+  `report.url` is set to `http://127.0.0.1:8069` so PDF rendering stays local.
+- With `defaults.country` set (and a password secret) the first init is staged:
+  `base` (with `--load-language`) -> ORM defaults and credentials -> remaining
+  apps, so `account` picks the chart of accounts for the company's country.
+- First init is all-or-nothing: any failure during it drops the fresh database
+  (`DROP DATABASE ... WITH (FORCE)`) and the next apply starts over. While the
+  credentials are being applied the database carries the comment
+  `oii:first-init-pending`; if apply was killed in that window, the next apply
+  drops, re-creates and redoes the first init. Databases with tables but no
+  Odoo registry are never initialised or dropped. Note that the real admin
+  credentials are valid while the apps install, so a late apps-install failure
+  drops a database whose owner may already have logged in; acceptable, since
+  nothing was created there yet.
+- When odoo.conf changes but the running web container is kept, apply restarts
+  it; `config/.restart-pending` makes a failed apply retry the restart.
 
 ### 4.9 `test` — batch testing and central sync
 

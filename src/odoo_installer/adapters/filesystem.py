@@ -19,6 +19,7 @@ class FileSystemLike(Protocol):
     def ensure_dir(self, path: Path) -> None: ...
     def read_text(self, path: Path) -> str | None: ...
     def write_text(self, path: Path, content: str, mode: int | None = None) -> None: ...
+    def remove_file(self, path: Path) -> None: ...
     def remove_tree(self, path: Path) -> None: ...
     def subdirectories(self, path: Path) -> list[Path]: ...
 
@@ -68,6 +69,12 @@ class FileSystemAdapter:
             path.chmod(final_mode)
         except OSError as exc:
             raise StackError(f"cannot write {path}: {exc}") from exc
+
+    def remove_file(self, path: Path) -> None:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            raise StackError(f"cannot remove {path}: {exc}") from exc
 
     def remove_tree(self, path: Path) -> None:
         if path == Path(path.anchor):

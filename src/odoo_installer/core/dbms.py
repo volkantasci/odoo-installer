@@ -137,6 +137,40 @@ def force_drop_database(
     )
 
 
+FIRST_INIT_PENDING = "oii:first-init-pending"
+
+
+def set_database_comment(
+    docker: ComposeLike,
+    stack_dir: Path,
+    db_service: str,
+    db_user: str,
+    name: str,
+    comment: str | None,
+) -> None:
+    """Set (or clear, with None) the comment of database `name`; durable in Postgres."""
+    validate_db_name(name)
+    if name in PROTECTED_DATABASES:
+        raise StackError(f"refusing to comment protected database {name!r}")
+    value = "NULL" if comment is None else "'" + comment.replace("'", "''") + "'"
+    _psql_exec(docker, stack_dir, db_service, db_user, f'COMMENT ON DATABASE "{name}" IS {value}')
+
+
+def database_comment(
+    docker: ComposeLike, stack_dir: Path, db_service: str, db_user: str, name: str
+) -> str:
+    """The database's comment, read from the `postgres` maintenance database."""
+    validate_db_name(name)
+    out = _psql_exec(
+        docker,
+        stack_dir,
+        db_service,
+        db_user,
+        f"SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE datname = '{name}'",
+    )
+    return out.strip()
+
+
 def drop_database_plan(
     docker: ComposeLike, stack_dir: Path, db_service: str, db_user: str, name: str
 ) -> list[Step]:
