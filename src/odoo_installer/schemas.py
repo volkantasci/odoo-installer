@@ -144,7 +144,7 @@ class StackExtras(BaseModel):
     list_db: bool | None = None
     workers: int | None = None
     max_cron_threads: int | None = None
-    limit_memory_soft: str | None = None  # "512", "1536m", "2g"
+    limit_memory_soft: str | None = None  # "768m", "1536m", "2g"
     limit_memory_hard: str | None = None
     odoo_login: str = "admin"
 

@@ -23,7 +23,7 @@ from odoo_installer.adapters.github import GitHubLike
 from odoo_installer.adapters.system import SystemLike
 from odoo_installer.config import get_tested_module
 from odoo_installer.constants import DEFAULT_ODOO_IMAGE
-from odoo_installer.core.dbms import create_database, module_states
+from odoo_installer.core.dbms import create_database, force_drop_database, module_states
 from odoo_installer.core.instances import (
     create_instance_plan,
     instance_dir,
@@ -341,42 +341,52 @@ def _install_step(
             )
 
         load_language = defaults.lang if first_init and defaults is not None else None
-        if staged and password is not None:
-            output = install_modules(
-                docker,
-                manifest.dir,
-                manifest.web_service,
-                db,
-                ["base"],
-                load_language=load_language,
-            )
-            apply_defaults(password)
-            apps = [m for m in modules if m != "base"]
-            if apps:
-                output = (
-                    install_modules(docker, manifest.dir, manifest.web_service, db, apps) or output
+        pw = password
+
+        def first_init_sequence() -> str:
+            def install(mods: list[str], language: str | None = None) -> str:
+                return install_modules(
+                    docker, manifest.dir, manifest.web_service, db, mods, load_language=language
                 )
-            note = output or f"installed {', '.join(modules)} into {db!r}"
-            note += f"; admin login {login!r} password applied"
-            note += "; staged: base → defaults → apps"
+
+            if staged and pw is not None:
+                output = install(["base"], load_language)
+                apply_defaults(pw)
+                apps = [m for m in modules if m != "base"]
+                if apps:
+                    output = install(apps) or output
+                note = output or f"installed {', '.join(modules)} into {db!r}"
+                note += f"; admin login {login!r} password applied"
+                note += "; staged: base → defaults → apps"
+            else:
+                output = install(modules, load_language)
+                note = output or f"installed {', '.join(modules)} into {db!r}"
+                if pw is None:
+                    return note
+                apply_defaults(pw)
+                note += f"; admin login {login!r} password applied"
             if defaults is not None and defaults.lang is not None:
                 note += f"; defaults {defaults.lang}/{defaults.country or '-'}"
             return note
-        output = install_modules(
-            docker,
-            manifest.dir,
-            manifest.web_service,
-            db,
-            modules,
-            load_language=load_language,
-        )
-        note = output or f"installed {', '.join(modules)} into {db!r}"
-        if password is not None:
-            apply_defaults(password)
-            note += f"; admin login {login!r} password applied"
-            if defaults is not None and defaults.lang is not None:
-                note += f"; defaults {defaults.lang}/{defaults.country or '-'}"
-        return note
+
+        if not first_init:
+            return first_init_sequence()
+        try:
+            return first_init_sequence()
+        except StackError as err:
+            # Odoo already created its tables, so the next apply would see an
+            # initialized database, skip the defaults and leave admin/admin on a
+            # routed tenant. An oii-managed db at this point holds no Odoo data.
+            try:
+                force_drop_database(docker, manifest.dir, manifest.db_service, manifest.db_user, db)
+            except StackError as drop_err:
+                raise StackError(
+                    f"{err}; database {db!r} could not be removed after the failed first "
+                    f"init ({drop_err}); drop it manually before the next apply"
+                ) from err
+            raise StackError(
+                f"{err}; database {db!r} was removed so the next apply starts a clean first init"
+            ) from err
 
     return Step(
         description=f"install modules {', '.join(modules)} into db {db!r} "

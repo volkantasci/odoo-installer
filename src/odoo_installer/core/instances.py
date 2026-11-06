@@ -40,6 +40,8 @@ MANIFEST_NAME = ".odoo-installer.json"
 ENV_NAME = ".env"
 COMPOSE_NAME = "docker-compose.yml"
 ODOO_CONF_NAME = "odoo.conf"
+WEB_SERVICE = "web"
+RESTART_DESCRIPTION = "restart web to load the changed odoo.conf (only if the container was kept)"
 # .env is read only by the host-side docker compose (0600 is enough). config/odoo.conf
 # is mounted into the container and must be readable by its `odoo` user, which has a
 # different uid than the host user — hence 0644.
@@ -326,12 +328,38 @@ def create_instance_plan(
                 ),
             )
         )
+    conf_path = stack_dir / "config" / ODOO_CONF_NAME
+    # `compose up -d` leaves a running container untouched when only the
+    # bind-mounted odoo.conf changed, so Odoo would keep the old settings.
+    restart_needed = manifest is not None and fs.read_text(conf_path) != odoo_conf(params)
+    web_ids: dict[str, str] = {}
+
+    def web_id() -> str:
+        return docker.compose(["ps", "-q", WEB_SERVICE], stack_dir).strip()
+
+    def start_stack() -> str:
+        if restart_needed:
+            web_ids["before"] = web_id()
+        result = docker.compose(["up", "-d"], stack_dir, timeout_s=900) or "started"
+        if restart_needed:
+            web_ids["after"] = web_id()
+        return result
+
     steps.append(
         Step(
             description=f"start the stack (docker compose up -d, project {name!r})",
-            run=lambda: docker.compose(["up", "-d"], stack_dir, timeout_s=900) or "started",
+            run=start_stack,
         )
     )
+    if restart_needed:
+
+        def restart_web() -> str:
+            before, after = web_ids.get("before"), web_ids.get("after")
+            if not before or before != after:
+                return "web container was (re)created; odoo.conf already loaded"
+            return docker.compose(["restart", WEB_SERVICE], stack_dir, timeout_s=300) or "restarted"
+
+        steps.append(Step(description=RESTART_DESCRIPTION, run=restart_web))
     steps.append(
         Step(
             description=f"wait for web container {name}-web-1 to become healthy",

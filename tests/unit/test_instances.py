@@ -8,6 +8,7 @@ import pytest
 from fakes import FakeDocker, FakeFs, FakeSystem
 
 from odoo_installer.core.instances import (
+    RESTART_DESCRIPTION,
     allocate_port,
     compose_action,
     create_instance_plan,
@@ -22,7 +23,7 @@ from odoo_installer.core.instances import (
 from odoo_installer.core.plan import apply_steps
 from odoo_installer.core.stack import parse_env
 from odoo_installer.exceptions import StackError
-from odoo_installer.schemas import GlobalConfig, RegistryEntry
+from odoo_installer.schemas import GlobalConfig, RegistryEntry, StackExtras
 
 
 def make_config(tmp_path: Path) -> GlobalConfig:
@@ -278,3 +279,61 @@ def load_registry_safe(registry_path: Path) -> dict[str, object]:
 
     data = tomllib.loads(registry_path.read_text(encoding="utf-8"))
     return data.get("instances", {})
+
+
+# --- restart on an odoo.conf-only change -------------------------------------
+
+
+def _replan(tmp_path: Path, fs: FakeFs, stack_dir: Path, docker: FakeDocker, **extras: object):
+    return create_instance_plan(
+        name="dev",
+        stack_dir=stack_dir,
+        http_port=8069,
+        odoo_image="odoo:19.0",
+        pg_tag=17,
+        config=make_config(tmp_path),
+        docker=docker,
+        fs=fs,
+        registry_path=tmp_path / "registry.toml",
+        extras=StackExtras(**extras),  # type: ignore[arg-type]
+    )
+
+
+def _verbs(docker: FakeDocker) -> list[str]:
+    return [c[0][0] for c in docker.compose_calls]
+
+
+def test_apply_restarts_web_when_only_odoo_conf_changed(tmp_path: Path) -> None:
+    fs, _, _, stack_dir = create_and_apply(tmp_path)
+    docker = FakeDocker(compose_results=["abc123\n", "up ok", "abc123\n"])
+    plan = _replan(tmp_path, fs, stack_dir, docker, workers=3)
+    assert RESTART_DESCRIPTION in [s.description for s in plan.steps]
+    apply_steps(plan.steps)
+    calls = [c[0] for c in docker.compose_calls]
+    assert [c for c in calls if c[0] == "restart"] == [("restart", "web")]
+    assert calls.index(("restart", "web")) > calls.index(("up", "-d"))
+
+
+def test_apply_skips_restart_when_web_was_recreated(tmp_path: Path) -> None:
+    fs, _, _, stack_dir = create_and_apply(tmp_path)
+    docker = FakeDocker(compose_results=["old\n", "up ok", "new\n"])
+    apply_steps(_replan(tmp_path, fs, stack_dir, docker, workers=3).steps)
+    assert "restart" not in _verbs(docker)
+
+
+def test_apply_skips_restart_when_odoo_conf_unchanged(tmp_path: Path) -> None:
+    fs, _, _, stack_dir = create_and_apply(tmp_path)
+    docker = FakeDocker(compose_results=["abc\n", "up ok", "abc\n"])
+    plan = _replan(tmp_path, fs, stack_dir, docker)
+    assert RESTART_DESCRIPTION not in [s.description for s in plan.steps]
+    apply_steps(plan.steps)
+    assert "restart" not in _verbs(docker)
+
+
+def test_create_never_restarts_after_first_up(tmp_path: Path) -> None:
+    fs, docker = FakeFs(), FakeDocker()
+    stack_dir = instance_dir(make_config(tmp_path), "dev", None)
+    plan = _replan(tmp_path, fs, stack_dir, docker, workers=3)
+    assert RESTART_DESCRIPTION not in [s.description for s in plan.steps]
+    apply_steps(plan.steps)
+    assert "restart" not in _verbs(docker)

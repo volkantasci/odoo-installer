@@ -441,12 +441,14 @@ def _run_install_step(
     defaults: DatabaseDefaults | None,
     *,
     password: str | None = "pw",
+    docker: FakeDocker | None = None,
+    initialized: bool = False,
 ) -> tuple[FakeDocker, list[str]]:
     from types import SimpleNamespace
 
     from odoo_installer.core import apply as apply_mod
 
-    docker = FakeDocker()
+    docker = docker or FakeDocker()
     scripts: list[str] = []
     orig_transfer = docker.compose_transfer
 
@@ -466,7 +468,7 @@ def _run_install_step(
     monkeypatch.setattr(apply_mod, "load_manifest", lambda fs, d: manifest)
     monkeypatch.setattr(apply_mod, "available_modules", lambda fs, m: dict.fromkeys(modules, "x"))
     monkeypatch.setattr(apply_mod, "_states_safe", lambda *a, **k: None)
-    monkeypatch.setattr(apply_mod, "_db_initialized", lambda *a, **k: False)
+    monkeypatch.setattr(apply_mod, "_db_initialized", lambda *a, **k: initialized)
     monkeypatch.setattr(
         apply_mod, "_secret_or", lambda fs, d, key: password if key.endswith("PASSWORD") else None
     )
@@ -544,3 +546,115 @@ def test_first_init_without_password_keeps_single_install(
         password=None,
     )
     assert _kinds(docker) == ["install base,account"]
+
+
+def test_staged_first_init_without_lang_has_no_load_language(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker, _ = _run_install_step(
+        monkeypatch, tmp_path, ["base", "account"], DatabaseDefaults(country="TR")
+    )
+    assert _kinds(docker) == ["install base", "shell", "install account"]
+    assert not any(a.startswith("--load-language") for a in docker.compose_calls[0][0])
+
+
+def test_base_url_default_reaches_the_orm_script(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _, scripts = _run_install_step(
+        monkeypatch,
+        tmp_path,
+        ["base", "account"],
+        DatabaseDefaults(country="TR", base_url="https://acme.example.com"),
+    )
+    assert "web.base.url" in scripts[0]
+    assert "https://acme.example.com" in scripts[0]
+
+
+class _FailingDocker(FakeDocker):
+    """Raises StackError for compose calls whose args contain `fail_on`."""
+
+    def __init__(self, fail_on: str, *, drop_fails: bool = False) -> None:
+        super().__init__()
+        self.fail_on = fail_on
+        self.drop_fails = drop_fails
+
+    def compose(self, args, project_dir, timeout_s=300):  # type: ignore[no-untyped-def]
+        out = super().compose(args, project_dir, timeout_s)
+        if self.drop_fails and "DROP DATABASE" in args[-1]:
+            raise StackError("postgres is down")
+        if any(self.fail_on in a for a in args):
+            raise StackError(f"boom in {self.fail_on}")
+        return out
+
+    def compose_transfer(self, args, project_dir, **kwargs):  # type: ignore[no-untyped-def]
+        super().compose_transfer(args, project_dir, **kwargs)
+        if any(self.fail_on in a for a in args):
+            raise StackError(f"boom in {self.fail_on}")
+
+
+def _drops(docker: FakeDocker) -> list[str]:
+    return [a[-1] for a, _ in docker.compose_calls if "DROP DATABASE" in a[-1]]
+
+
+def test_failed_defaults_script_drops_the_half_initialised_database(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker = _FailingDocker("shell")
+    with pytest.raises(StackError, match="boom in shell") as exc:
+        _run_install_step(
+            monkeypatch,
+            tmp_path,
+            ["base", "account"],
+            DatabaseDefaults(country="TR"),
+            docker=docker,
+        )
+    assert _drops(docker) == ['DROP DATABASE IF EXISTS "shop" WITH (FORCE)']
+    assert "removed" in str(exc.value) and "shop" in str(exc.value)
+
+
+def test_failed_apps_install_in_staged_flow_drops_the_database(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker = _FailingDocker("account")
+    with pytest.raises(StackError, match="boom in account"):
+        _run_install_step(
+            monkeypatch,
+            tmp_path,
+            ["base", "account"],
+            DatabaseDefaults(country="TR"),
+            docker=docker,
+        )
+    assert len(_drops(docker)) == 1
+
+
+def test_failed_install_on_initialised_database_does_not_drop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker = _FailingDocker("account")
+    with pytest.raises(StackError, match="boom in account"):
+        _run_install_step(
+            monkeypatch,
+            tmp_path,
+            ["base", "account"],
+            DatabaseDefaults(country="TR"),
+            docker=docker,
+            initialized=True,
+        )
+    assert _drops(docker) == []
+
+
+def test_drop_failure_keeps_the_original_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker = _FailingDocker("shell", drop_fails=True)
+    with pytest.raises(StackError, match="boom in shell") as exc:
+        _run_install_step(
+            monkeypatch,
+            tmp_path,
+            ["base", "account"],
+            DatabaseDefaults(country="TR"),
+            docker=docker,
+        )
+    assert "could not be removed" in str(exc.value)
+    assert "postgres is down" in str(exc.value)

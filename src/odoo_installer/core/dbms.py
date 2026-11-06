@@ -125,6 +125,18 @@ def create_database(
     return "created"
 
 
+def force_drop_database(
+    docker: ComposeLike, stack_dir: Path, db_service: str, db_user: str, name: str
+) -> str:
+    """Drop `name` even with open connections (Postgres >= 13); missing is fine."""
+    validate_db_name(name)
+    if name in PROTECTED_DATABASES:
+        raise StackError(f"refusing to drop protected database {name!r}")
+    return _psql_exec(
+        docker, stack_dir, db_service, db_user, f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'
+    )
+
+
 def drop_database_plan(
     docker: ComposeLike, stack_dir: Path, db_service: str, db_user: str, name: str
 ) -> list[Step]:

@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-06
+
+### Added
+
+- **Staged first init.** With a password secret and `defaults.country`, a
+  database's first init installs `base`, applies the ORM defaults, then installs
+  the remaining apps, so `account` picks the chart of accounts that matches the
+  company's country. Without either, the single-install flow is unchanged.
+- **`defaults.base_url`.** `[databases.<name>.defaults]` accepts `base_url`; it
+  is set as `web.base.url` and frozen on first init.
+
+### Fixed
+
+- **Restart on an odoo.conf-only change.** When `oii apply` rewrites odoo.conf
+  and `compose up -d` keeps the running web container, web is now restarted so
+  the new settings load. No restart when the container was recreated, when
+  odoo.conf did not change, or on a fresh create.
+- **First init is all-or-nothing.** If a step after the base install fails
+  (defaults script, apps install), the half-initialised database is dropped and
+  the error says so, so the next apply starts a clean first init instead of
+  leaving Odoo's default `admin`/`admin` login in place. If the drop itself
+  fails, the original error is kept and the drop failure is appended.
+
+### Docs
+
+- The 0.9.0 note that `"0"` keeps workers from starting was wrong: in Odoo `0`
+  disables the limit. The `256m` floor still rejects it (typos, accidental "no
+  limit"). The schema example now uses `"768m"`.
+
 ## [0.9.0] - 2026-11-06
 
 ### Added
