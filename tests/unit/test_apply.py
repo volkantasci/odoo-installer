@@ -574,8 +574,11 @@ def test_base_url_default_reaches_the_orm_script(
 class _FailingDocker(FakeDocker):
     """Raises StackError for compose calls whose args contain `fail_on`."""
 
-    def __init__(self, fail_on: str, *, drop_fails: bool = False) -> None:
+    def __init__(
+        self, fail_on: str, *, drop_fails: bool = False, exc: Exception | None = None
+    ) -> None:
         super().__init__()
+        self.exc = exc
         self.fail_on = fail_on
         self.drop_fails = drop_fails
 
@@ -584,13 +587,13 @@ class _FailingDocker(FakeDocker):
         if self.drop_fails and "DROP DATABASE" in args[-1]:
             raise StackError("postgres is down")
         if any(self.fail_on in a for a in args):
-            raise StackError(f"boom in {self.fail_on}")
+            raise self.exc or StackError(f"boom in {self.fail_on}")
         return out
 
     def compose_transfer(self, args, project_dir, **kwargs):  # type: ignore[no-untyped-def]
         super().compose_transfer(args, project_dir, **kwargs)
         if any(self.fail_on in a for a in args):
-            raise StackError(f"boom in {self.fail_on}")
+            raise self.exc or StackError(f"boom in {self.fail_on}")
 
 
 def _drops(docker: FakeDocker) -> list[str]:
@@ -658,3 +661,20 @@ def test_drop_failure_keeps_the_original_error(
         )
     assert "could not be removed" in str(exc.value)
     assert "postgres is down" in str(exc.value)
+
+
+def test_non_compose_error_in_first_init_also_drops_the_database(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker = _FailingDocker("shell", exc=OSError("disk full"))
+    with pytest.raises(StackError, match="OSError: disk full") as exc:
+        _run_install_step(
+            monkeypatch,
+            tmp_path,
+            ["base", "account"],
+            DatabaseDefaults(country="TR"),
+            docker=docker,
+        )
+    assert len(_drops(docker)) == 1
+    assert "removed" in str(exc.value)
+    assert isinstance(exc.value.__cause__, OSError)

@@ -373,19 +373,20 @@ def _install_step(
             return first_init_sequence()
         try:
             return first_init_sequence()
-        except StackError as err:
+        except Exception as err:
             # Odoo already created its tables, so the next apply would see an
             # initialized database, skip the defaults and leave admin/admin on a
             # routed tenant. An oii-managed db at this point holds no Odoo data.
+            what = str(err) if isinstance(err, StackError) else f"{type(err).__name__}: {err}"
             try:
                 force_drop_database(docker, manifest.dir, manifest.db_service, manifest.db_user, db)
             except StackError as drop_err:
                 raise StackError(
-                    f"{err}; database {db!r} could not be removed after the failed first "
+                    f"{what}; database {db!r} could not be removed after the failed first "
                     f"init ({drop_err}); drop it manually before the next apply"
                 ) from err
             raise StackError(
-                f"{err}; database {db!r} was removed so the next apply starts a clean first init"
+                f"{what}; database {db!r} was removed so the next apply starts a clean first init"
             ) from err
 
     return Step(
