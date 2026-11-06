@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,8 +34,22 @@ class StackParams:
     proxy_mode: bool = False
     list_db: bool = True
     workers: int | None = None
+    max_cron_threads: int | None = None
+    limit_memory_soft: int | None = None  # bytes
+    limit_memory_hard: int | None = None  # bytes
     odoo_login: str = "admin"
     odoo_password: str = ""
+
+
+_MEMORY_UNITS = {"": 1, "k": 1024, "m": 1024**2, "g": 1024**3}
+
+
+def memory_bytes(value: str) -> int:
+    """Convert a spec memory value ("512", "1k", "1536m", "2g") to bytes."""
+    match = re.fullmatch(r"(\d+)([kmg]?)", value)
+    if match is None:
+        raise ValueError(f"invalid memory value: {value!r}")
+    return int(match.group(1)) * _MEMORY_UNITS[match.group(2)]
 
 
 def _environment() -> jinja2.Environment:
@@ -91,6 +106,9 @@ def odoo_conf(params: StackParams) -> str:
             proxy_mode=params.proxy_mode,
             list_db=params.list_db,
             workers=params.workers,
+            max_cron_threads=params.max_cron_threads,
+            limit_memory_soft=params.limit_memory_soft,
+            limit_memory_hard=params.limit_memory_hard,
         )
     )
 

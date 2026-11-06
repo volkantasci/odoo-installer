@@ -43,6 +43,9 @@ class SettingsSpec(BaseModel):
     proxy_mode: bool | None = None
     list_db: bool | None = None
     workers: int | None = Field(default=None, ge=0)
+    max_cron_threads: int | None = Field(default=None, ge=0)
+    limit_memory_soft: str | None = Field(default=None, pattern=r"^\d+[kmg]?$")
+    limit_memory_hard: str | None = Field(default=None, pattern=r"^\d+[kmg]?$")
 
 
 class RepoSpec(BaseModel):
@@ -172,5 +175,8 @@ def spec_to_extras(spec: StackSpec) -> StackExtras:
         proxy_mode=spec.settings.proxy_mode if spec.settings else None,
         list_db=spec.settings.list_db if spec.settings else None,
         workers=spec.settings.workers if spec.settings else None,
+        max_cron_threads=spec.settings.max_cron_threads if spec.settings else None,
+        limit_memory_soft=spec.settings.limit_memory_soft if spec.settings else None,
+        limit_memory_hard=spec.settings.limit_memory_hard if spec.settings else None,
         odoo_login=spec.admin_login,
     )

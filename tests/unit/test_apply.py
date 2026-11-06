@@ -300,3 +300,48 @@ list_db = false
     conf = (tmp_path / "instances" / "ing" / "config" / "odoo.conf").read_text()
     assert "proxy_mode = True" in conf
     assert "list_db = False" in conf
+
+
+def test_apply_renders_knobs_and_keeps_them_on_reapply(patch_deps, tmp_path: Path) -> None:
+    container = make_container(tmp_path)
+    patch_deps(container)
+    first = write_spec(
+        tmp_path,
+        """
+name = "knobs"
+[ingress]
+network = "violetear-ingress"
+[resources]
+memory = "1536m"
+cpus = 1.0
+[settings]
+workers = 1
+max_cron_threads = 1
+limit_memory_soft = "1536m"
+""",
+    )
+    assert runner.invoke(app, ["apply", str(first), "--apply"]).exit_code == 0
+    stack = tmp_path / "instances" / "knobs"
+    assert "max_cron_threads = 1" in (stack / "config" / "odoo.conf").read_text().splitlines()
+    assert "mem_limit: 1536m" in (stack / "docker-compose.yml").read_text()
+    second = write_spec(
+        tmp_path,
+        """
+name = "knobs"
+[ingress]
+network = "violetear-ingress"
+[resources]
+memory = "4g"
+""",
+    )
+    assert runner.invoke(app, ["apply", str(second), "--apply"]).exit_code == 0
+    conf = (stack / "config" / "odoo.conf").read_text().splitlines()
+    assert "max_cron_threads = 1" in conf  # manifest precedence: unspecified keeps value
+    assert "limit_memory_soft = 1610612736" in conf
+    assert "mem_limit: 4g" in (stack / "docker-compose.yml").read_text()  # explicit value wins
+
+
+def test_load_spec_rejects_decimal_memory_knob(tmp_path: Path) -> None:
+    path = write_spec(tmp_path, 'name = "x"\n[settings]\nlimit_memory_soft = "1.5g"\n')
+    with pytest.raises(ConfigError):
+        load_spec(path)
