@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 
 from odoo_installer.adapters.docker import ComposeLike
-from odoo_installer.constants import RUNNER_HTTP_PORT
+from odoo_installer.constants import CONTAINER_HTTP_PORT, RUNNER_HTTP_PORT
 
 
 def install_modules(
@@ -62,6 +62,7 @@ def set_admin_credentials(
     country: str | None = None,
     timezone: str | None = None,
     currency: str | None = None,
+    base_url: str | None = None,
     timeout_s: int = 300,
 ) -> str:
     """Set the database's admin credentials and first-init defaults via the ORM.
@@ -127,6 +128,17 @@ def set_admin_credentials(
                 "    if not currency.active:",
                 "        currency.active = True",
                 "    company.write({'currency_id': currency.id})",
+            ]
+        )
+    if base_url is not None:
+        # Freeze the public URL: otherwise Odoo rewrites web.base.url on the
+        # first admin login. Reports render through the container's own port.
+        lines.extend(
+            [
+                "params = env['ir.config_parameter'].sudo()",
+                f"params.set_param('web.base.url', {base_url!r})",
+                "params.set_param('web.base.url.freeze', 'True')",
+                f"params.set_param('report.url', 'http://127.0.0.1:{CONTAINER_HTTP_PORT}')",
             ]
         )
     lines.extend(

@@ -11,7 +11,7 @@ from typer.testing import CliRunner
 
 from odoo_installer.cli.deps import Container
 from odoo_installer.cli.main import app
-from odoo_installer.core.spec import load_spec, repo_arg_from_url
+from odoo_installer.core.spec import DatabaseDefaults, load_spec, repo_arg_from_url
 from odoo_installer.exceptions import ConfigError, StackError
 from odoo_installer.schemas import GlobalConfig
 
@@ -429,3 +429,118 @@ limit_memory_hard = "2560m"
     conf = (stack / "config" / "odoo.conf").read_text().splitlines()
     assert "limit_memory_hard = 2684354560" in conf  # the explicit value wins
     assert "limit_memory_soft = 2147483648" in conf
+
+
+# --- staged first init -------------------------------------------------------
+
+
+def _run_install_step(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    modules: list[str],
+    defaults: DatabaseDefaults | None,
+    *,
+    password: str | None = "pw",
+) -> tuple[FakeDocker, list[str]]:
+    from types import SimpleNamespace
+
+    from odoo_installer.core import apply as apply_mod
+
+    docker = FakeDocker()
+    scripts: list[str] = []
+    orig_transfer = docker.compose_transfer
+
+    def capture(args, project_dir, *, stdin_path=None, stdout_path=None, timeout_s=1800):  # type: ignore[no-untyped-def]
+        if stdin_path is not None:
+            scripts.append(Path(stdin_path).read_text(encoding="utf-8"))
+        orig_transfer(
+            args,
+            project_dir,
+            stdin_path=stdin_path,
+            stdout_path=stdout_path,
+            timeout_s=timeout_s,
+        )
+
+    docker.compose_transfer = capture  # type: ignore[method-assign]
+    manifest = SimpleNamespace(dir=tmp_path, web_service="web", db_service="db", db_user="odoo")
+    monkeypatch.setattr(apply_mod, "load_manifest", lambda fs, d: manifest)
+    monkeypatch.setattr(apply_mod, "available_modules", lambda fs, m: dict.fromkeys(modules, "x"))
+    monkeypatch.setattr(apply_mod, "_states_safe", lambda *a, **k: None)
+    monkeypatch.setattr(apply_mod, "_db_initialized", lambda *a, **k: False)
+    monkeypatch.setattr(
+        apply_mod, "_secret_or", lambda fs, d, key: password if key.endswith("PASSWORD") else None
+    )
+    step = apply_mod._install_step(
+        docker=docker,
+        fs=FakeFs(),
+        stack_dir=tmp_path,
+        db="shop",
+        modules=modules,
+        allow_untested=True,
+        defaults=defaults,
+        tested_path=tmp_path / "tested.json",
+    )
+    step.run()
+    return docker, scripts
+
+
+def _kinds(docker: FakeDocker) -> list[str]:
+    out = []
+    for args, _ in docker.compose_calls:
+        out.append("shell" if "shell" in args else "install " + args[args.index("-i") + 1])
+    return out
+
+
+def test_first_init_with_country_installs_base_then_defaults_then_apps(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker, scripts = _run_install_step(
+        monkeypatch,
+        tmp_path,
+        ["base", "account", "sale"],
+        DatabaseDefaults(lang="tr_TR", country="TR"),
+    )
+    calls = [c[0] for c in docker.compose_calls]
+    assert calls[0] == (
+        "exec", "-T", "web", "odoo", "-d", "shop", "-i", "base",
+        "--stop-after-init", "--http-port=8071", "--load-language=tr_TR",
+    )  # fmt: skip
+    assert "shell" in calls[1]
+    assert "search([('code', '=', 'TR')]" in scripts[0]
+    assert calls[2] == (
+        "exec", "-T", "web", "odoo", "-d", "shop", "-i", "account,sale",
+        "--stop-after-init", "--http-port=8071",
+    )  # fmt: skip
+    assert len(calls) == 3
+
+
+def test_first_init_with_only_base_runs_no_empty_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker, _ = _run_install_step(
+        monkeypatch, tmp_path, ["base"], DatabaseDefaults(lang="tr_TR", country="TR")
+    )
+    assert _kinds(docker) == ["install base", "shell"]
+
+
+def test_first_init_without_country_keeps_single_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker, _ = _run_install_step(
+        monkeypatch, tmp_path, ["base", "account", "sale"], DatabaseDefaults(lang="tr_TR")
+    )
+    assert _kinds(docker) == ["install base,account,sale", "shell"]
+    assert "--load-language=tr_TR" in docker.compose_calls[0][0]
+
+
+def test_first_init_without_password_keeps_single_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker, _ = _run_install_step(
+        monkeypatch,
+        tmp_path,
+        ["base", "account"],
+        DatabaseDefaults(lang="tr_TR", country="TR"),
+        password=None,
+    )
+    assert _kinds(docker) == ["install base,account"]

@@ -104,6 +104,8 @@ class DatabaseDefaults(BaseModel):
     timezone: str | None = Field(default=None, min_length=1, max_length=64)
     # ISO 4217 currency code, e.g. "TRY"
     currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+    # Public origin (no path), frozen as web.base.url so Odoo never rewrites it
+    base_url: str | None = Field(default=None, pattern=r"^https?://[^/\s]+$")
 
 
 class DatabaseSpec(BaseModel):

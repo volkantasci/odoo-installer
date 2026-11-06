@@ -313,37 +313,69 @@ def _install_step(
         if states is not None and all(states.get(m) == "installed" for m in modules):
             return f"{db!r}: all requested modules already installed"
         first_init = not _db_initialized(docker, manifest, db)
+        login = _secret_or(fs, stack_dir, "ODOO_ADMIN_LOGIN") or "admin"
+        password = _secret_or(fs, stack_dir, "ODOO_ADMIN_PASSWORD") if first_init else None
+        # Odoo picks the chart of accounts when `account` is installed, from the
+        # company's country. So with a country the first init is staged:
+        # base -> ORM defaults (country, ...) -> the remaining apps.
+        staged = (
+            first_init and password is not None and defaults is not None and bool(defaults.country)
+        )
+
+        def apply_defaults(pw: str) -> None:
+            # Odoo initializes a fresh db with login/password admin/admin; the
+            # generated per-instance credentials and locale defaults are applied
+            # via the ORM (raw SQL would bypass password hashing)
+            set_admin_credentials(
+                docker,
+                manifest.dir,
+                manifest.web_service,
+                db,
+                login,
+                pw,
+                lang=defaults.lang if defaults is not None else None,
+                country=defaults.country if defaults is not None else None,
+                timezone=defaults.timezone if defaults is not None else None,
+                currency=defaults.currency if defaults is not None else None,
+                base_url=defaults.base_url if defaults is not None else None,
+            )
+
+        load_language = defaults.lang if first_init and defaults is not None else None
+        if staged and password is not None:
+            output = install_modules(
+                docker,
+                manifest.dir,
+                manifest.web_service,
+                db,
+                ["base"],
+                load_language=load_language,
+            )
+            apply_defaults(password)
+            apps = [m for m in modules if m != "base"]
+            if apps:
+                output = (
+                    install_modules(docker, manifest.dir, manifest.web_service, db, apps) or output
+                )
+            note = output or f"installed {', '.join(modules)} into {db!r}"
+            note += f"; admin login {login!r} password applied"
+            note += "; staged: base → defaults → apps"
+            if defaults is not None and defaults.lang is not None:
+                note += f"; defaults {defaults.lang}/{defaults.country or '-'}"
+            return note
         output = install_modules(
             docker,
             manifest.dir,
             manifest.web_service,
             db,
             modules,
-            load_language=defaults.lang if first_init and defaults is not None else None,
+            load_language=load_language,
         )
         note = output or f"installed {', '.join(modules)} into {db!r}"
-        if first_init:
-            # Odoo initializes a fresh db with login/password admin/admin; the
-            # generated per-instance credentials and locale defaults are applied
-            # right after, via the ORM (raw SQL would bypass password hashing)
-            login = _secret_or(fs, stack_dir, "ODOO_ADMIN_LOGIN") or "admin"
-            password = _secret_or(fs, stack_dir, "ODOO_ADMIN_PASSWORD")
-            if password is not None:
-                set_admin_credentials(
-                    docker,
-                    manifest.dir,
-                    manifest.web_service,
-                    db,
-                    login,
-                    password,
-                    lang=defaults.lang if defaults is not None else None,
-                    country=defaults.country if defaults is not None else None,
-                    timezone=defaults.timezone if defaults is not None else None,
-                    currency=defaults.currency if defaults is not None else None,
-                )
-                note += f"; admin login {login!r} password applied"
-                if defaults is not None and defaults.lang is not None:
-                    note += f"; defaults {defaults.lang}/{defaults.country or '-'}"
+        if password is not None:
+            apply_defaults(password)
+            note += f"; admin login {login!r} password applied"
+            if defaults is not None and defaults.lang is not None:
+                note += f"; defaults {defaults.lang}/{defaults.country or '-'}"
         return note
 
     return Step(
