@@ -36,9 +36,9 @@ class ResourcesSpec(BaseModel):
     cpus: float | None = Field(default=None, gt=0)
 
 
-# The smallest memory limit a spec may set. Odoo applies limit_memory_hard as
-# RLIMIT_AS, so "0" (or a few MiB) means no worker can even start: below this
-# floor a value is a typo, never a calibration.
+# The smallest memory limit a spec may set. In Odoo "0" disables a limit (it does
+# not stop workers); the floor rejects typos and an accidental "no limit". Odoo
+# applies limit_memory_hard as RLIMIT_AS, so a few MiB would be unworkable anyway.
 MEMORY_LIMIT_FLOOR = "256m"
 
 
@@ -104,6 +104,8 @@ class DatabaseDefaults(BaseModel):
     timezone: str | None = Field(default=None, min_length=1, max_length=64)
     # ISO 4217 currency code, e.g. "TRY"
     currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
+    # Public origin (no path), frozen as web.base.url so Odoo never rewrites it
+    base_url: str | None = Field(default=None, pattern=r"^https?://[^/\s]+$")
 
 
 class DatabaseSpec(BaseModel):

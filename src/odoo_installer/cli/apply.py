@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from pathlib import Path
 from typing import Annotated
@@ -10,7 +11,8 @@ import typer
 
 from odoo_installer.cli import deps
 from odoo_installer.console import console, error, progress_reporter, render_plan
-from odoo_installer.core.apply import build_apply_plan
+from odoo_installer.core.apply import apply_lock, build_apply_plan
+from odoo_installer.core.instances import validate_instance_name
 from odoo_installer.core.plan import apply_steps
 from odoo_installer.core.spec import load_spec
 from odoo_installer.exceptions import OdooInstallerError
@@ -44,54 +46,60 @@ def apply(
     the stack exists (the dry run shows that as one convergence step).
     """
     container = deps.build()
-    try:
-        spec = load_spec(spec_path)
-        plan = build_apply_plan(
-            spec,
-            config=container.config,
-            docker=container.docker,
-            fs=container.fs,
-            github=container.github,
-            git=container.git,
-            system=container.system,
-            registry_path=container.registry_path,
-            tested_path=container.tested_path,
-        )
-    except OdooInstallerError as exc:
-        error(str(exc))
-        raise typer.Exit(code=1) from None
-
-    if as_json:
-        typer.echo(
-            json.dumps(
-                {
-                    "instance": plan.name,
-                    "stack_dir": str(plan.stack_dir),
-                    "created": plan.created,
-                    "steps": [
-                        {
-                            "index": index,
-                            "description": step.description,
-                            "already_satisfied": step.already_satisfied,
-                        }
-                        for index, step in enumerate(plan.steps, start=1)
-                    ],
-                },
-                indent=2,
+    with contextlib.ExitStack() as stack:
+        try:
+            spec = load_spec(spec_path)
+            lock = (
+                apply_lock(container.registry_path, validate_instance_name(spec.name))
+                if apply_changes
+                else contextlib.nullcontext()
             )
-        )
-        if not apply_changes:
-            raise typer.Exit(code=0)
+            stack.enter_context(lock)
+            plan = build_apply_plan(
+                spec,
+                config=container.config,
+                docker=container.docker,
+                fs=container.fs,
+                github=container.github,
+                git=container.git,
+                system=container.system,
+                registry_path=container.registry_path,
+                tested_path=container.tested_path,
+            )
+        except OdooInstallerError as exc:
+            error(str(exc))
+            raise typer.Exit(code=1) from None
 
-    if not apply_changes:
-        title = (
-            f"Apply plan: {plan.name} ({'new instance' if plan.created else 'existing instance'})"
-        )
-        render_plan(plan.steps, title)
-        return
-    try:
-        apply_steps(plan.steps, on_step=progress_reporter())
-    except OdooInstallerError as exc:
-        error(str(exc))
-        raise typer.Exit(code=1) from None
-    console.print(f"[green]✔[/green] instance {plan.name!r} converged to {spec_path.name}")
+        if as_json:
+            typer.echo(
+                json.dumps(
+                    {
+                        "instance": plan.name,
+                        "stack_dir": str(plan.stack_dir),
+                        "created": plan.created,
+                        "steps": [
+                            {
+                                "index": index,
+                                "description": step.description,
+                                "already_satisfied": step.already_satisfied,
+                            }
+                            for index, step in enumerate(plan.steps, start=1)
+                        ],
+                    },
+                    indent=2,
+                )
+            )
+            if not apply_changes:
+                raise typer.Exit(code=0)
+
+        if not apply_changes:
+            kind = "new instance" if plan.created else "existing instance"
+            title = f"Apply plan: {plan.name} ({kind})"
+            render_plan(plan.steps, title)
+            return
+        try:
+            apply_steps(plan.steps, on_step=progress_reporter())
+        except OdooInstallerError as exc:
+            error(str(exc))
+            raise typer.Exit(code=1) from None
+        console.print(f"[green]✔[/green] instance {plan.name!r} converged to {spec_path.name}")

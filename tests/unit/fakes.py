@@ -286,6 +286,9 @@ class FakeFs:
         final_mode = mode if mode is not None else (previous_mode or 0o644)
         path.chmod(final_mode)
 
+    def remove_file(self, path: Path) -> None:
+        path.unlink(missing_ok=True)
+
     def remove_tree(self, path: Path) -> None:
         if path == Path(path.anchor):
             raise StackError("refusing to remove filesystem root")

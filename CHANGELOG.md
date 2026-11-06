@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-06
+
+### Added
+
+- **Staged first init.** With a password secret and `defaults.country`, a
+  database's first init installs `base`, applies the ORM defaults, then installs
+  the remaining apps, so `account` picks the chart of accounts that matches the
+  company's country. Without either, the single-install flow is unchanged.
+- **`defaults.base_url`.** `[databases.<name>.defaults]` accepts `base_url`; it
+  is set as `web.base.url` and frozen on first init. It also sets `report.url`
+  to `http://127.0.0.1:8069` (PDF rendering stays local to the container).
+
+### Fixed
+
+- **Restart on an odoo.conf-only change.** When `oii apply` rewrites odoo.conf
+  and `compose up -d` keeps the running web container, web is now restarted so
+  the new settings load. No restart when the container was recreated or freshly
+  started by `up -d`, when odoo.conf did not change, or on a fresh create. The
+  rewrite also writes `config/.restart-pending`; it is removed once the restart
+  succeeded (or was unnecessary), so a failed apply still restarts web on the
+  next run.
+- **First init is all-or-nothing until the defaults are applied.** A failure
+  before the real admin credentials and defaults were applied (base install,
+  defaults script; staged or not) drops the fresh database. Once they are
+  applied, a later failure (e.g. the staged apps install) never drops: the
+  next apply continues the install. The drop says so in the error, so the next
+  apply starts a clean first init instead of leaving Odoo's default
+  `admin`/`admin` login in place. If the drop itself fails, the original error is kept and the drop failure is appended.
+- **Interrupted first init is redone.** When the admin credentials are applied,
+  the database carries the Postgres comment `oii:first-init-pending` from before
+  the first Odoo command until the defaults script has committed. If apply died
+  in between (even SIGKILL), the next apply finds the marker, drops and
+  re-creates the database and runs a clean first init in the same run.
+- **Pending marker is checked before the "already installed" shortcut**, and the
+  redo never drops a database anyone has logged into: it requires
+  `res_users_log` (recorded logins: login page / authenticate; direct RPC with a
+  password or API key leaves no row) to count exactly 0 and otherwise refuses,
+  explaining how to verify the credentials and giving the `oii db drop` command
+  or the psql command (built from the active container runtime) that clears the
+  marker. A failed redo says it was an interrupted first init.
+- **`oii apply --apply` takes an exclusive per-instance lock**; a concurrent
+  run fails fast with "another apply is running for <name>".
+- **Fail-safe first-init detection.** A successful module-state query proves the
+  database is initialised; unexpected psql output, or a database that has tables
+  but no Odoo registry, raises instead of being initialised or dropped.
+
+### Docs
+
+- The 0.9.0 note that `"0"` keeps workers from starting was wrong: in Odoo `0`
+  disables the limit. The `256m` floor still rejects it (typos, accidental "no
+  limit"). The schema example now uses `"768m"`.
+
 ## [0.9.0] - 2026-11-06
 
 ### Added

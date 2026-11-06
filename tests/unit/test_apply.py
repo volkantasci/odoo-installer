@@ -11,7 +11,7 @@ from typer.testing import CliRunner
 
 from odoo_installer.cli.deps import Container
 from odoo_installer.cli.main import app
-from odoo_installer.core.spec import load_spec, repo_arg_from_url
+from odoo_installer.core.spec import DatabaseDefaults, load_spec, repo_arg_from_url
 from odoo_installer.exceptions import ConfigError, StackError
 from odoo_installer.schemas import GlobalConfig
 
@@ -429,3 +429,723 @@ limit_memory_hard = "2560m"
     conf = (stack / "config" / "odoo.conf").read_text().splitlines()
     assert "limit_memory_hard = 2684354560" in conf  # the explicit value wins
     assert "limit_memory_soft = 2147483648" in conf
+
+
+# --- staged first init -------------------------------------------------------
+
+
+def _run_install_step(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    modules: list[str],
+    defaults: DatabaseDefaults | None,
+    *,
+    password: str | None = "pw",
+    docker: FakeDocker | None = None,
+    initialized: bool = False,
+) -> tuple[FakeDocker, list[str]]:
+    from types import SimpleNamespace
+
+    from odoo_installer.core import apply as apply_mod
+
+    docker = docker or FakeDocker()
+    scripts: list[str] = []
+    orig_transfer = docker.compose_transfer
+
+    def capture(args, project_dir, *, stdin_path=None, stdout_path=None, timeout_s=1800):  # type: ignore[no-untyped-def]
+        if stdin_path is not None:
+            scripts.append(Path(stdin_path).read_text(encoding="utf-8"))
+        orig_transfer(
+            args,
+            project_dir,
+            stdin_path=stdin_path,
+            stdout_path=stdout_path,
+            timeout_s=timeout_s,
+        )
+
+    docker.compose_transfer = capture  # type: ignore[method-assign]
+    manifest = SimpleNamespace(
+        name="acme", dir=tmp_path, web_service="web", db_service="db", db_user="odoo"
+    )
+    monkeypatch.setattr(apply_mod, "load_manifest", lambda fs, d: manifest)
+    monkeypatch.setattr(apply_mod, "available_modules", lambda fs, m: dict.fromkeys(modules, "x"))
+    monkeypatch.setattr(apply_mod, "_states_safe", lambda *a, **k: None)
+    monkeypatch.setattr(apply_mod, "_db_initialized", lambda *a, **k: initialized)
+    monkeypatch.setattr(
+        apply_mod, "_secret_or", lambda fs, d, key: password if key.endswith("PASSWORD") else None
+    )
+    step = apply_mod._install_step(
+        docker=docker,
+        fs=FakeFs(),
+        stack_dir=tmp_path,
+        db="shop",
+        modules=modules,
+        allow_untested=True,
+        defaults=defaults,
+        tested_path=tmp_path / "tested.json",
+    )
+    step.run()
+    return docker, scripts
+
+
+def _odoo_calls(docker: FakeDocker) -> list[tuple[str, ...]]:
+    return [args for args, _ in docker.compose_calls if "psql" not in args]
+
+
+def _kinds(docker: FakeDocker) -> list[str]:
+    out = []
+    for args in _odoo_calls(docker):
+        out.append("shell" if "shell" in args else "install " + args[args.index("-i") + 1])
+    return out
+
+
+def test_first_init_with_country_installs_base_then_defaults_then_apps(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker, scripts = _run_install_step(
+        monkeypatch,
+        tmp_path,
+        ["base", "account", "sale"],
+        DatabaseDefaults(lang="tr_TR", country="TR"),
+    )
+    calls = _odoo_calls(docker)
+    assert calls[0] == (
+        "exec", "-T", "web", "odoo", "-d", "shop", "-i", "base",
+        "--stop-after-init", "--http-port=8071", "--load-language=tr_TR",
+    )  # fmt: skip
+    assert "shell" in calls[1]
+    assert "search([('code', '=', 'TR')]" in scripts[0]
+    assert calls[2] == (
+        "exec", "-T", "web", "odoo", "-d", "shop", "-i", "account,sale",
+        "--stop-after-init", "--http-port=8071",
+    )  # fmt: skip
+    assert len(calls) == 3
+
+
+def test_first_init_with_only_base_runs_no_empty_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker, _ = _run_install_step(
+        monkeypatch, tmp_path, ["base"], DatabaseDefaults(lang="tr_TR", country="TR")
+    )
+    assert _kinds(docker) == ["install base", "shell"]
+
+
+def test_first_init_without_country_keeps_single_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker, _ = _run_install_step(
+        monkeypatch, tmp_path, ["base", "account", "sale"], DatabaseDefaults(lang="tr_TR")
+    )
+    assert _kinds(docker) == ["install base,account,sale", "shell"]
+    assert "--load-language=tr_TR" in _odoo_calls(docker)[0]
+
+
+def test_first_init_without_password_keeps_single_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker, _ = _run_install_step(
+        monkeypatch,
+        tmp_path,
+        ["base", "account"],
+        DatabaseDefaults(lang="tr_TR", country="TR"),
+        password=None,
+    )
+    assert _kinds(docker) == ["install base,account"]
+
+
+def test_staged_first_init_without_lang_has_no_load_language(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker, _ = _run_install_step(
+        monkeypatch, tmp_path, ["base", "account"], DatabaseDefaults(country="TR")
+    )
+    assert _kinds(docker) == ["install base", "shell", "install account"]
+    assert not any(a.startswith("--load-language") for a in _odoo_calls(docker)[0])
+
+
+def test_base_url_default_reaches_the_orm_script(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _, scripts = _run_install_step(
+        monkeypatch,
+        tmp_path,
+        ["base", "account"],
+        DatabaseDefaults(country="TR", base_url="https://acme.example.com"),
+    )
+    assert "web.base.url" in scripts[0]
+    assert "https://acme.example.com" in scripts[0]
+
+
+class _FailingDocker(FakeDocker):
+    """Raises StackError for compose calls whose args contain `fail_on`."""
+
+    def __init__(
+        self, fail_on: str, *, drop_fails: bool = False, exc: Exception | None = None
+    ) -> None:
+        super().__init__()
+        self.exc = exc
+        self.fail_on = fail_on
+        self.drop_fails = drop_fails
+
+    def compose(self, args, project_dir, timeout_s=300):  # type: ignore[no-untyped-def]
+        out = super().compose(args, project_dir, timeout_s)
+        if self.drop_fails and "DROP DATABASE" in args[-1]:
+            raise StackError("postgres is down")
+        if any(self.fail_on in a for a in args):
+            raise self.exc or StackError(f"boom in {self.fail_on}")
+        return out
+
+    def compose_transfer(self, args, project_dir, **kwargs):  # type: ignore[no-untyped-def]
+        super().compose_transfer(args, project_dir, **kwargs)
+        if any(self.fail_on in a for a in args):
+            raise self.exc or StackError(f"boom in {self.fail_on}")
+
+
+def _drops(docker: FakeDocker) -> list[str]:
+    return [a[-1] for a, _ in docker.compose_calls if "DROP DATABASE" in a[-1]]
+
+
+def test_failed_defaults_script_drops_the_half_initialised_database(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker = _FailingDocker("shell")
+    with pytest.raises(StackError, match="boom in shell") as exc:
+        _run_install_step(
+            monkeypatch,
+            tmp_path,
+            ["base", "account"],
+            DatabaseDefaults(country="TR"),
+            docker=docker,
+        )
+    assert _drops(docker) == ['DROP DATABASE IF EXISTS "shop" WITH (FORCE)']
+    assert "removed" in str(exc.value) and "shop" in str(exc.value)
+
+
+def test_failed_apps_install_after_defaults_keeps_the_database(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker = _FailingDocker("account")
+    with pytest.raises(StackError, match="boom in account") as exc:
+        _run_install_step(
+            monkeypatch,
+            tmp_path,
+            ["base", "account"],
+            DatabaseDefaults(country="TR"),
+            docker=docker,
+        )
+    assert _drops(docker) == []
+    assert "next apply continues the install" in str(exc.value)
+
+
+def test_next_apply_after_a_late_apps_failure_just_installs_the_apps(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker = ScriptDocker({STATES_SQL: "base|installed\naccount|uninstalled", COMMENT_SQL: ""})
+    _run_real_detection(
+        monkeypatch, tmp_path, docker, ["base", "account"], DatabaseDefaults(country="TR")
+    )
+    trace = _trace(docker)
+    assert [t for t in trace if t.startswith("odoo")] == ["odoo -i base,account"]
+    assert not any("DROP" in t or "COMMENT ON" in t for t in trace)
+
+
+def test_failed_install_on_initialised_database_does_not_drop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker = _FailingDocker("account")
+    with pytest.raises(StackError, match="boom in account"):
+        _run_install_step(
+            monkeypatch,
+            tmp_path,
+            ["base", "account"],
+            DatabaseDefaults(country="TR"),
+            docker=docker,
+            initialized=True,
+        )
+    assert _drops(docker) == []
+
+
+def test_drop_failure_keeps_the_original_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker = _FailingDocker("shell", drop_fails=True)
+    with pytest.raises(StackError, match="boom in shell") as exc:
+        _run_install_step(
+            monkeypatch,
+            tmp_path,
+            ["base", "account"],
+            DatabaseDefaults(country="TR"),
+            docker=docker,
+        )
+    assert "could not be removed" in str(exc.value)
+    assert "postgres is down" in str(exc.value)
+
+
+def test_non_compose_error_in_first_init_also_drops_the_database(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker = _FailingDocker("shell", exc=OSError("disk full"))
+    with pytest.raises(StackError, match="OSError: disk full") as exc:
+        _run_install_step(
+            monkeypatch,
+            tmp_path,
+            ["base", "account"],
+            DatabaseDefaults(country="TR"),
+            docker=docker,
+        )
+    assert len(_drops(docker)) == 1
+    assert "removed" in str(exc.value)
+    assert isinstance(exc.value.__cause__, OSError)
+
+
+# --- fail-safe detection, interrupted-init marker, drop gates ------------------
+
+
+class ScriptDocker(FakeDocker):
+    """Feeds scripted psql output (matched on a SQL substring) through compose().
+
+    A rule value that is an Exception is raised, like a failing psql would.
+    """
+
+    def __init__(self, rules: dict[str, str | Exception] | None = None) -> None:
+        super().__init__()
+        self.rules = rules or {}
+
+    def compose(self, args, project_dir, timeout_s=300):  # type: ignore[no-untyped-def]
+        super().compose(args, project_dir, timeout_s)
+        if "psql" in args:
+            for needle, out in self.rules.items():
+                if needle in args[-1]:
+                    if isinstance(out, Exception):
+                        raise out
+                    return out
+        return ""
+
+
+NO_RELATION = StackError('relation "ir_module_module" does not exist')
+REGISTRY_SQL = "table_name = 'ir_module_module'"
+TABLE_COUNT_SQL = "FROM information_schema.tables WHERE table_schema = 'public'"
+STATES_SQL = "FROM ir_module_module WHERE name IN"
+COMMENT_SQL = "shobj_description"
+PENDING = "oii:first-init-pending"
+LOGIN_COUNT_SQL = "SELECT count(*) FROM res_users_log"
+
+
+def _run_real_detection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    docker: FakeDocker,
+    modules: list[str],
+    defaults: DatabaseDefaults | None,
+    *,
+    password: str | None = "pw",
+) -> str:
+    """Runs _install_step with the REAL detection functions (only manifest/secrets faked)."""
+    from types import SimpleNamespace
+
+    from odoo_installer.core import apply as apply_mod
+
+    manifest = SimpleNamespace(
+        name="acme", dir=tmp_path, web_service="web", db_service="db", db_user="odoo"
+    )
+    monkeypatch.setattr(apply_mod, "load_manifest", lambda fs, d: manifest)
+    monkeypatch.setattr(apply_mod, "available_modules", lambda fs, m: dict.fromkeys(modules, "x"))
+    monkeypatch.setattr(
+        apply_mod, "_secret_or", lambda fs, d, key: password if key.endswith("PASSWORD") else None
+    )
+    step = apply_mod._install_step(
+        docker=docker,
+        fs=FakeFs(),
+        stack_dir=tmp_path,
+        db="shop",
+        modules=modules,
+        allow_untested=True,
+        defaults=defaults,
+        tested_path=tmp_path / "tested.json",
+    )
+    return step.run()
+
+
+def _trace(docker: FakeDocker) -> list[str]:
+    """One label per compose call, in order: psql SQL as 'db: sql', odoo calls by kind."""
+    out = []
+    for args, _ in docker.compose_calls:
+        if "psql" in args:
+            out.append(f"{args[args.index('-d') + 1]}: {args[-1]}")
+        elif "shell" in args:
+            out.append("odoo shell")
+        elif "-i" in args:
+            out.append("odoo -i " + args[args.index("-i") + 1])
+    return out
+
+
+def _fresh_rules(**extra: str | Exception) -> dict[str, str | Exception]:
+    rules: dict[str, str | Exception] = {
+        STATES_SQL: NO_RELATION,
+        REGISTRY_SQL: "",
+        TABLE_COUNT_SQL: "0",
+    }
+    rules.update(extra)
+    return rules
+
+
+def test_marker_wraps_a_staged_first_init(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    docker = ScriptDocker(_fresh_rules())
+    _run_real_detection(
+        monkeypatch, tmp_path, docker, ["base", "account"], DatabaseDefaults(country="TR")
+    )
+    trace = [t for t in _trace(docker) if t.startswith(("odoo", "postgres: COMMENT"))]
+    assert trace == [
+        f"postgres: COMMENT ON DATABASE \"shop\" IS '{PENDING}'",
+        "odoo -i base",
+        "odoo shell",
+        'postgres: COMMENT ON DATABASE "shop" IS NULL',
+        "odoo -i account",
+    ]
+
+
+def test_marker_wraps_a_single_install_first_init(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker = ScriptDocker(_fresh_rules())
+    _run_real_detection(monkeypatch, tmp_path, docker, ["base", "account"], DatabaseDefaults())
+    trace = [t for t in _trace(docker) if t.startswith(("odoo", "postgres: COMMENT"))]
+    assert trace == [
+        f"postgres: COMMENT ON DATABASE \"shop\" IS '{PENDING}'",
+        "odoo -i base,account",
+        "odoo shell",
+        'postgres: COMMENT ON DATABASE "shop" IS NULL',
+    ]
+
+
+def test_no_password_means_no_marker_sql(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    docker = ScriptDocker(_fresh_rules())
+    _run_real_detection(
+        monkeypatch, tmp_path, docker, ["base"], DatabaseDefaults(country="TR"), password=None
+    )
+    assert not any("COMMENT ON" in t for t in _trace(docker))
+
+
+def test_pending_marker_at_start_drops_recreates_and_redoes_first_init(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker = ScriptDocker(
+        {
+            STATES_SQL: "",  # query ran: tables exist (module absent)
+            COMMENT_SQL: PENDING,
+            LOGIN_COUNT_SQL: "0",
+        }
+    )
+    note = _run_real_detection(
+        monkeypatch, tmp_path, docker, ["base", "account"], DatabaseDefaults(country="TR")
+    )
+    trace = [t for t in _trace(docker) if "shobj" not in t and "ir_module_module" not in t]
+    assert trace[0] == "shop: SELECT count(*) FROM res_users_log"  # login guard first
+    trace = trace[1:]
+    assert trace[0] == 'postgres: DROP DATABASE IF EXISTS "shop" WITH (FORCE)'
+    assert trace[1].startswith("postgres: SELECT 1 FROM pg_database")  # create_database probe
+    assert trace[2] == 'postgres: CREATE DATABASE "shop"'
+    assert f"postgres: COMMENT ON DATABASE \"shop\" IS '{PENDING}'" in trace
+    assert trace.index("odoo -i base") < trace.index("odoo shell") < trace.index("odoo -i account")
+    assert "interrupted first init" in note
+
+
+def test_initialised_database_without_marker_is_a_normal_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker = ScriptDocker({STATES_SQL: "base|installed\naccount|uninstalled", COMMENT_SQL: ""})
+    _run_real_detection(
+        monkeypatch, tmp_path, docker, ["base", "account"], DatabaseDefaults(country="TR")
+    )
+    trace = _trace(docker)
+    assert not any("DROP" in t or "COMMENT ON" in t or "information_schema" in t for t in trace)
+    assert [t for t in trace if t.startswith("odoo")] == ["odoo -i base,account"]
+
+
+def test_registry_present_via_psql_one_is_initialised(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker = ScriptDocker({STATES_SQL: NO_RELATION, REGISTRY_SQL: "1\n", COMMENT_SQL: ""})
+    _run_real_detection(monkeypatch, tmp_path, docker, ["base"], None)
+    assert not any("DROP" in t or "COMMENT ON" in t for t in _trace(docker))
+
+
+def test_garbage_psql_output_refuses_to_guess(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker = ScriptDocker({STATES_SQL: NO_RELATION, REGISTRY_SQL: "1\nTime: 3.2 ms"})
+    with pytest.raises(StackError, match="unexpected psql output"):
+        _run_real_detection(monkeypatch, tmp_path, docker, ["base"], DatabaseDefaults())
+    assert not [t for t in _trace(docker) if t.startswith("odoo")]
+    assert not any("DROP" in t for t in _trace(docker))
+
+
+def test_foreign_tables_without_registry_are_never_initialised_or_dropped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker = ScriptDocker({STATES_SQL: NO_RELATION, REGISTRY_SQL: "", TABLE_COUNT_SQL: "3"})
+    with pytest.raises(StackError, match="has tables but no Odoo registry"):
+        _run_real_detection(monkeypatch, tmp_path, docker, ["base"], DatabaseDefaults())
+    trace = _trace(docker)
+    assert not any("DROP" in t or "COMMENT ON" in t or t.startswith("odoo") for t in trace)
+
+
+def test_state_query_success_proves_initialisation_without_registry_query(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker = ScriptDocker({STATES_SQL: "base|installed", COMMENT_SQL: ""})
+    _run_real_detection(monkeypatch, tmp_path, docker, ["base", "sale"], None)
+    assert not any("information_schema" in t for t in _trace(docker))
+
+
+def test_drop_after_single_install_first_init_failure_targets_postgres(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker = _FailingDocker("base,account")
+    with pytest.raises(StackError, match="removed"):
+        _run_install_step(
+            monkeypatch, tmp_path, ["base", "account"], DatabaseDefaults(), docker=docker
+        )
+    drop = [a for a, _ in docker.compose_calls if "DROP DATABASE" in a[-1]]
+    assert len(drop) == 1 and drop[0][drop[0].index("-d") + 1] == "postgres"
+
+
+def test_drop_after_staged_base_install_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker = _FailingDocker("base")
+    with pytest.raises(StackError, match="removed"):
+        _run_install_step(
+            monkeypatch,
+            tmp_path,
+            ["base", "account"],
+            DatabaseDefaults(country="TR"),
+            docker=docker,
+        )
+    drop = [a for a, _ in docker.compose_calls if "DROP DATABASE" in a[-1]]
+    assert len(drop) == 1 and drop[0][drop[0].index("-d") + 1] == "postgres"
+
+
+def test_drop_failure_of_any_exception_type_keeps_the_original_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class Docker(_FailingDocker):
+        def compose(self, args, project_dir, timeout_s=300):  # type: ignore[no-untyped-def]
+            if "DROP DATABASE" in args[-1]:
+                raise OSError("socket gone")
+            return super().compose(args, project_dir, timeout_s)
+
+    with pytest.raises(StackError, match="boom in shell") as exc:
+        _run_install_step(
+            monkeypatch,
+            tmp_path,
+            ["base", "account"],
+            DatabaseDefaults(country="TR"),
+            docker=Docker("shell"),
+        )
+    assert "socket gone" in str(exc.value) and "could not be removed" in str(exc.value)
+
+
+@pytest.mark.parametrize("name", ["postgres", "template0", "template1"])
+def test_force_drop_refuses_protected_databases(name: str) -> None:
+    from odoo_installer.core.dbms import force_drop_database
+
+    docker = FakeDocker()
+    with pytest.raises(StackError, match="protected"):
+        force_drop_database(docker, Path("/x"), "db", "odoo", name)
+    assert docker.compose_calls == []
+
+
+def _pending_rules(
+    logins: str | Exception = "0", states: str = "base|installed\naccount|installed"
+):
+    return {STATES_SQL: states, COMMENT_SQL: PENDING, LOGIN_COUNT_SQL: logins}
+
+
+def _redo_trace(docker: FakeDocker) -> list[str]:
+    return [t for t in _trace(docker) if t.startswith("odoo") or "DROP" in t or "CREATE DATA" in t]
+
+
+def test_pending_marker_with_everything_installed_still_redoes_single_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker = ScriptDocker(_pending_rules())
+    note = _run_real_detection(
+        monkeypatch, tmp_path, docker, ["base", "account"], DatabaseDefaults(lang="tr_TR")
+    )
+    assert _redo_trace(docker) == [
+        'postgres: DROP DATABASE IF EXISTS "shop" WITH (FORCE)',
+        'postgres: CREATE DATABASE "shop"',
+        "odoo -i base,account",
+        "odoo shell",
+    ]
+    assert "interrupted first init" in note
+
+
+def test_pending_marker_with_base_only_still_redoes_staged_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker = ScriptDocker(_pending_rules(states="base|installed"))
+    _run_real_detection(monkeypatch, tmp_path, docker, ["base"], DatabaseDefaults(country="TR"))
+    assert _redo_trace(docker) == [
+        'postgres: DROP DATABASE IF EXISTS "shop" WITH (FORCE)',
+        'postgres: CREATE DATABASE "shop"',
+        "odoo -i base",
+        "odoo shell",
+    ]
+
+
+@pytest.mark.parametrize(
+    "logins", ["3", "1\nTime: 2 ms", "", StackError('relation "res_users_log" does not exist')]
+)
+def test_pending_marker_never_drops_a_database_with_logins(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, logins: str | Exception
+) -> None:
+    docker = ScriptDocker(_pending_rules(logins=logins))
+    with pytest.raises(StackError, match="will not drop it") as exc:
+        _run_real_detection(
+            monkeypatch, tmp_path, docker, ["base", "account"], DatabaseDefaults(country="TR")
+        )
+    assert 'COMMENT ON DATABASE "shop" IS NULL' in str(exc.value)
+    assert "psql" in str(exc.value) and "default" in str(exc.value)
+    assert _redo_trace(docker) == []
+
+
+def test_failed_redo_says_it_was_an_interrupted_init_that_was_dropped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class Docker(ScriptDocker):
+        def compose_transfer(self, args, project_dir, **kw):  # type: ignore[no-untyped-def]
+            super().compose_transfer(args, project_dir, **kw)
+            raise StackError("boom in shell")
+
+    docker = Docker(_pending_rules())
+    with pytest.raises(StackError, match="boom in shell") as exc:
+        _run_real_detection(monkeypatch, tmp_path, docker, ["base", "account"], DatabaseDefaults())
+    assert "interrupted first init" in str(exc.value)
+    assert "dropped and re-created" in str(exc.value)
+
+
+def test_failed_drop_after_marker_points_at_the_marker_recovery(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class Docker(ScriptDocker):
+        def compose_transfer(self, args, project_dir, **kw):  # type: ignore[no-untyped-def]
+            super().compose_transfer(args, project_dir, **kw)
+            raise StackError("boom in shell")
+
+        def compose(self, args, project_dir, timeout_s=300):  # type: ignore[no-untyped-def]
+            if "DROP DATABASE" in args[-1]:
+                raise StackError("pg down")
+            return super().compose(args, project_dir, timeout_s)
+
+    with pytest.raises(StackError, match="boom in shell") as exc:
+        _run_real_detection(
+            monkeypatch, tmp_path, Docker(_fresh_rules()), ["base"], DatabaseDefaults()
+        )
+    assert "could not be removed" in str(exc.value) and "pg down" in str(exc.value)
+    assert "manually" not in str(exc.value)
+    assert "next apply" in str(exc.value)
+
+
+def test_garbled_table_count_is_unexpected_output_not_foreign_tables(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker = ScriptDocker(
+        {STATES_SQL: NO_RELATION, REGISTRY_SQL: "", TABLE_COUNT_SQL: "3\nTime: 1ms"}
+    )
+    with pytest.raises(StackError, match="unexpected psql output"):
+        _run_real_detection(monkeypatch, tmp_path, docker, ["base"], DatabaseDefaults())
+
+
+def test_apply_lock_is_exclusive_per_instance(tmp_path: Path) -> None:
+    from odoo_installer.core.apply import apply_lock
+
+    registry = tmp_path / "state" / "registry.toml"  # directory does not exist yet
+    with apply_lock(registry, "acme"):
+        with (
+            pytest.raises(StackError, match="another apply is running for acme"),
+            apply_lock(registry, "acme"),
+        ):
+            pass
+        with apply_lock(registry, "other"):  # other instances are independent
+            pass
+    with apply_lock(registry, "acme"):  # released afterwards
+        pass
+
+
+def test_recovery_command_uses_the_adapters_runtime_and_quotes_data(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stack = tmp_path / "my stack"
+    stack.mkdir()
+    docker = ScriptDocker(_pending_rules(logins="3"))
+    docker.runtime = "podman"  # type: ignore[assignment]
+    with pytest.raises(StackError, match="will not drop it") as exc:
+        _run_real_detection(monkeypatch, stack, docker, ["base"], DatabaseDefaults())
+    msg = str(exc.value)
+    assert f"cd '{stack}' && podman compose exec -T db psql -U odoo -d postgres -c" in msg
+    assert "docker compose" not in msg
+    assert 'COMMENT ON DATABASE "shop" IS NULL' in msg
+    # recovery guidance
+    assert "admin/admin" in msg
+    assert "oii instance secret acme --key ODOO_ADMIN_PASSWORD" in msg
+    assert "oii db drop shop --instance acme --apply --yes" in msg
+    assert "skips the first-init defaults" in msg
+
+
+def test_lock_only_treats_would_block_as_another_apply(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import errno
+    import fcntl
+
+    from odoo_installer.core.apply import apply_lock
+
+    def broken(_handle: object, _op: int) -> None:
+        raise OSError(errno.ENOLCK, "No locks available")
+
+    monkeypatch.setattr(fcntl, "flock", broken)
+    with (
+        pytest.raises(OSError, match="No locks available"),
+        apply_lock(tmp_path / "registry.toml", "acme"),
+    ):
+        pass
+
+
+def test_cli_apply_holds_the_lock_for_plan_and_steps_but_dry_run_does_not(
+    monkeypatch: pytest.MonkeyPatch, patch_deps, tmp_path: Path
+) -> None:
+    from odoo_installer.cli import apply as cli_apply
+    from odoo_installer.core.apply import apply_lock
+
+    container = make_container(tmp_path)
+    patch_deps(container)
+    spec = write_spec(tmp_path, 'name = "locked"\nhttp_port = 18070\n')
+    seen: list[tuple[str, bool]] = []
+
+    def probe(label: str) -> None:
+        try:
+            with apply_lock(container.registry_path, "locked"):
+                seen.append((label, False))  # we could take it: nobody holds it
+        except StackError:
+            seen.append((label, True))
+
+    real_build, real_steps = cli_apply.build_apply_plan, cli_apply.apply_steps
+
+    def build(*args, **kwargs):  # type: ignore[no-untyped-def]
+        probe("plan")
+        return real_build(*args, **kwargs)
+
+    def steps(*args, **kwargs):  # type: ignore[no-untyped-def]
+        probe("steps")
+        return real_steps(*args, **kwargs)
+
+    monkeypatch.setattr(cli_apply, "build_apply_plan", build)
+    monkeypatch.setattr(cli_apply, "apply_steps", steps)
+    assert runner.invoke(app, ["apply", str(spec)]).exit_code == 0  # dry run
+    assert seen == [("plan", False)]
+    seen.clear()
+    assert runner.invoke(app, ["apply", str(spec), "--apply"]).exit_code == 0
+    assert seen == [("plan", True), ("steps", True)]

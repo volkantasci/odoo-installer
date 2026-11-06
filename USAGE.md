@@ -539,6 +539,32 @@ Semantics worth knowing:
   pass: language (UI + default partner language), country, timezone and company
   currency are set once, so a customer can change them later without `apply`
   overwriting the choice.
+- `defaults.base_url` is an origin only (`https://acme.example.com`, no path, no
+  trailing slash). It becomes `web.base.url`, is frozen on first init, and
+  `report.url` is set to `http://127.0.0.1:8069` so PDF rendering stays local.
+- With `defaults.country` set (and a password secret) the first init is staged:
+  `base` (with `--load-language` when `defaults.lang` is set) -> ORM defaults and credentials -> remaining
+  apps, so `account` picks the chart of accounts for the company's country.
+- First init is all-or-nothing: any failure during it drops the fresh database
+  (`DROP DATABASE ... WITH (FORCE)`) and the next apply starts over. While the
+  credentials are being applied the database carries the comment
+  `oii:first-init-pending`; if apply was killed in that window, the next apply
+  drops, re-creates and redoes the first init. That drop is guarded: it runs
+  only when `res_users_log` counts exactly 0 rows (no recorded login: login
+  page or authenticate; direct RPC with a password or API key leaves no row, so
+  this guard cannot see it); otherwise apply refuses and prints the psql command that
+  clears the marker after you verified the admin credentials. oii never drops a database whose real admin credentials were already
+  applied: a failure after that point (e.g. the apps install) keeps the database
+  and the next apply continues the install. Databases with tables but no
+  Odoo registry are never initialised or dropped. Note that the real admin
+  credentials are valid while the apps install, so a late apps-install failure
+  drops a database whose owner may already have logged in; acceptable, since
+  nothing was created there yet.
+- When odoo.conf changes but the running web container is kept, apply restarts
+  it; `config/.restart-pending` makes a failed apply retry the restart.
+- Two `oii apply --apply` runs for the same instance cannot interleave: the
+  second one fails fast with "another apply is running for <name>" (an
+  exclusive lock under `locks/` next to the registry).
 
 ### 4.9 `test` — batch testing and central sync
 

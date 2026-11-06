@@ -25,6 +25,10 @@ PORT_ALLOCATION_END = 8099  # inclusive; first free port in this range wins
 # web container, so it never clashes with the serving process on 8069.
 RUNNER_HTTP_PORT = 8071
 
+# Port Odoo listens on inside the web container (the compose template maps
+# the published port to it).
+CONTAINER_HTTP_PORT = 8069
+
 # Scratch databases created by `test module` / `test suite` always use this prefix and
 # are dropped after the run (DEVELOPMENT.md §7).
 SCRATCH_DB_PREFIX = "oitest"

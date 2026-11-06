@@ -22,7 +22,7 @@ from odoo_installer.core.instances import (
 from odoo_installer.core.plan import apply_steps
 from odoo_installer.core.stack import parse_env
 from odoo_installer.exceptions import StackError
-from odoo_installer.schemas import GlobalConfig, RegistryEntry
+from odoo_installer.schemas import GlobalConfig, RegistryEntry, StackExtras
 
 
 def make_config(tmp_path: Path) -> GlobalConfig:
@@ -278,3 +278,108 @@ def load_registry_safe(registry_path: Path) -> dict[str, object]:
 
     data = tomllib.loads(registry_path.read_text(encoding="utf-8"))
     return data.get("instances", {})
+
+
+# --- restart on an odoo.conf-only change -------------------------------------
+
+
+def _replan(tmp_path: Path, fs: FakeFs, stack_dir: Path, docker: FakeDocker, **extras: object):
+    return create_instance_plan(
+        name="dev",
+        stack_dir=stack_dir,
+        http_port=8069,
+        odoo_image="odoo:19.0",
+        pg_tag=17,
+        config=make_config(tmp_path),
+        docker=docker,
+        fs=fs,
+        registry_path=tmp_path / "registry.toml",
+        extras=StackExtras(**extras),  # type: ignore[arg-type]
+    )
+
+
+def _verbs(docker: FakeDocker) -> list[str]:
+    return [c[0][0] for c in docker.compose_calls]
+
+
+RESTART_TEXT = "restart web to load the changed odoo.conf (only if the container was kept)"
+
+
+class _RestartFailsDocker(FakeDocker):
+    def compose(self, args, project_dir, timeout_s=300):  # type: ignore[no-untyped-def]
+        out = super().compose(args, project_dir, timeout_s)
+        if args[0] == "restart":
+            raise StackError("restart failed")
+        return out
+
+
+def _marker(stack_dir: Path) -> Path:
+    return stack_dir / "config" / ".restart-pending"
+
+
+def test_apply_restarts_web_when_only_odoo_conf_changed(tmp_path: Path) -> None:
+    fs, _, _, stack_dir = create_and_apply(tmp_path)
+    docker = FakeDocker(compose_results=["abc123\n", "up ok", "abc123\n"])
+    plan = _replan(tmp_path, fs, stack_dir, docker, workers=3)
+    assert RESTART_TEXT in [s.description for s in plan.steps]
+    apply_steps(plan.steps)
+    calls = [c[0] for c in docker.compose_calls]
+    assert [c for c in calls if c[0] == "restart"] == [("restart", "web")]
+    assert calls.index(("restart", "web")) > calls.index(("up", "-d"))
+    assert not _marker(stack_dir).exists()
+
+
+def test_apply_skips_restart_when_web_was_recreated(tmp_path: Path) -> None:
+    fs, _, _, stack_dir = create_and_apply(tmp_path)
+    docker = FakeDocker(compose_results=["old\n", "up ok", "new\n"])
+    results = apply_steps(_replan(tmp_path, fs, stack_dir, docker, workers=3).steps)
+    assert "restart" not in _verbs(docker)
+    assert "recreated" in results[-2]
+    assert not _marker(stack_dir).exists()
+
+
+def test_apply_skips_restart_when_web_was_stopped_and_started(tmp_path: Path) -> None:
+    fs, _, _, stack_dir = create_and_apply(tmp_path)
+    docker = FakeDocker(compose_results=["\n", "up ok", "fresh\n"])
+    results = apply_steps(_replan(tmp_path, fs, stack_dir, docker, workers=3).steps)
+    assert "restart" not in _verbs(docker)
+    assert "started" in results[-2]
+    assert not _marker(stack_dir).exists()
+
+
+def test_apply_skips_restart_when_odoo_conf_unchanged_but_compose_changed(
+    tmp_path: Path,
+) -> None:
+    fs, _, _, stack_dir = create_and_apply(tmp_path)
+    compose_before = (stack_dir / "docker-compose.yml").read_text(encoding="utf-8")
+    docker = FakeDocker(compose_results=["abc\n", "up ok", "abc\n"])
+    plan = _replan(tmp_path, fs, stack_dir, docker, memory_limit="3g")
+    assert RESTART_TEXT not in [s.description for s in plan.steps]
+    apply_steps(plan.steps)
+    assert (stack_dir / "docker-compose.yml").read_text(encoding="utf-8") != compose_before
+    assert "restart" not in _verbs(docker)
+
+
+def test_failed_restart_keeps_the_marker_and_the_next_apply_restarts(tmp_path: Path) -> None:
+    fs, _, _, stack_dir = create_and_apply(tmp_path)
+    docker = _RestartFailsDocker(compose_results=["abc\n", "up ok", "abc\n"])
+    with pytest.raises(StackError, match="restart failed"):
+        apply_steps(_replan(tmp_path, fs, stack_dir, docker, workers=3).steps)
+    assert _marker(stack_dir).exists()
+    # odoo.conf is already rewritten, yet the pending marker plans the restart
+    docker2 = FakeDocker(compose_results=["abc\n", "up ok", "abc\n"])
+    plan = _replan(tmp_path, fs, stack_dir, docker2, workers=3)
+    assert RESTART_TEXT in [s.description for s in plan.steps]
+    apply_steps(plan.steps)
+    assert ("restart", "web") in [c[0] for c in docker2.compose_calls]
+    assert not _marker(stack_dir).exists()
+
+
+def test_create_never_restarts_after_first_up(tmp_path: Path) -> None:
+    fs, docker = FakeFs(), FakeDocker()
+    stack_dir = instance_dir(make_config(tmp_path), "dev", None)
+    plan = _replan(tmp_path, fs, stack_dir, docker, workers=3)
+    assert RESTART_TEXT not in [s.description for s in plan.steps]
+    apply_steps(plan.steps)
+    assert "restart" not in _verbs(docker)
+    assert not _marker(stack_dir).exists()
