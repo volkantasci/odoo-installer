@@ -345,3 +345,87 @@ def test_load_spec_rejects_decimal_memory_knob(tmp_path: Path) -> None:
     path = write_spec(tmp_path, 'name = "x"\n[settings]\nlimit_memory_soft = "1.5g"\n')
     with pytest.raises(ConfigError):
         load_spec(path)
+
+
+def test_load_spec_rejects_decimal_hard_limit(tmp_path: Path) -> None:
+    path = write_spec(tmp_path, 'name = "x"\n[settings]\nlimit_memory_hard = "2.5g"\n')
+    with pytest.raises(ConfigError):
+        load_spec(path)
+
+
+@pytest.mark.parametrize("knob", ["limit_memory_soft", "limit_memory_hard"])
+@pytest.mark.parametrize("value", ["0", "255m", "1k", "1048576"])
+def test_load_spec_rejects_memory_limits_below_the_floor(
+    tmp_path: Path, knob: str, value: str
+) -> None:
+    """limit_memory_hard is RLIMIT_AS: a tiny value means no worker can start."""
+    path = write_spec(tmp_path, f'name = "x"\n[settings]\n{knob} = "{value}"\n')
+    with pytest.raises(ConfigError, match="256m"):
+        load_spec(path)
+
+
+def test_load_spec_accepts_limits_from_the_floor_up(tmp_path: Path) -> None:
+    spec = load_spec(
+        write_spec(
+            tmp_path,
+            'name = "x"\n[settings]\nlimit_memory_soft = "262144k"\nlimit_memory_hard = "256m"\n',
+        )
+    )
+    assert spec.settings is not None
+    assert (spec.settings.limit_memory_soft, spec.settings.limit_memory_hard) == (
+        "262144k",
+        "256m",
+    )
+
+
+def test_load_spec_rejects_soft_limit_above_hard_limit(tmp_path: Path) -> None:
+    path = write_spec(
+        tmp_path, 'name = "x"\n[settings]\nlimit_memory_soft = "3g"\nlimit_memory_hard = "2560m"\n'
+    )
+    with pytest.raises(ConfigError, match="limit_memory_soft"):
+        load_spec(path)
+    equal = 'name = "x"\n[settings]\nlimit_memory_soft = "2g"\nlimit_memory_hard = "2048m"\n'
+    assert load_spec(write_spec(tmp_path, equal)).settings is not None
+
+
+def test_apply_keeps_limit_memory_hard_on_reapply(patch_deps, tmp_path: Path) -> None:
+    """Like every knob: an unspecified hard limit keeps the manifest's value,
+    an explicit one wins (violetear relies on always naming it)."""
+    container = make_container(tmp_path)
+    patch_deps(container)
+    stack = tmp_path / "instances" / "hard"
+    first = write_spec(
+        tmp_path,
+        """
+name = "hard"
+[ingress]
+network = "violetear-ingress"
+[settings]
+limit_memory_soft = "1536m"
+limit_memory_hard = "2g"
+""",
+    )
+    assert runner.invoke(app, ["apply", str(first), "--apply"]).exit_code == 0
+    assert (
+        "limit_memory_hard = 2147483648"
+        in (stack / "config" / "odoo.conf").read_text().splitlines()
+    )
+    unspecified = write_spec(tmp_path, 'name = "hard"\n[ingress]\nnetwork = "violetear-ingress"\n')
+    assert runner.invoke(app, ["apply", str(unspecified), "--apply"]).exit_code == 0
+    conf = (stack / "config" / "odoo.conf").read_text().splitlines()
+    assert "limit_memory_hard = 2147483648" in conf  # kept from the manifest
+    explicit = write_spec(
+        tmp_path,
+        """
+name = "hard"
+[ingress]
+network = "violetear-ingress"
+[settings]
+limit_memory_soft = "2048m"
+limit_memory_hard = "2560m"
+""",
+    )
+    assert runner.invoke(app, ["apply", str(explicit), "--apply"]).exit_code == 0
+    conf = (stack / "config" / "odoo.conf").read_text().splitlines()
+    assert "limit_memory_hard = 2684354560" in conf  # the explicit value wins
+    assert "limit_memory_soft = 2147483648" in conf

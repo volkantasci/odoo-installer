@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`"512"`, `"1536m"`, `"2g"`; k/m/g are 1024 powers, decimals are rejected) and
   are rendered into odoo.conf as bytes. Like the other knobs they persist in the
   manifest: an unspecified value keeps the manifest's, an explicit one wins.
+  Each limit must be at least `256m` (Odoo applies the hard one as `RLIMIT_AS`,
+  so `"0"` would keep every worker from starting), and the soft limit may not
+  exceed the hard one when both are given; such a spec is rejected at load time.
 - **Per-database first-initialisation defaults.** `oii apply` can now carry
   `[databases.<name>.defaults]` with `lang`, `country`, `timezone` and
   `currency`. On the database's first init only, the language is activated via
