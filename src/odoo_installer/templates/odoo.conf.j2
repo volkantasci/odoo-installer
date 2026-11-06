@@ -12,3 +12,12 @@ proxy_mode = {{ 'True' if proxy_mode else 'False' }}
 {% if workers is not none %}
 workers = {{ workers }}
 {% endif %}
+{% if max_cron_threads is not none %}
+max_cron_threads = {{ max_cron_threads }}
+{% endif %}
+{% if limit_memory_soft is not none %}
+limit_memory_soft = {{ limit_memory_soft }}
+{% endif %}
+{% if limit_memory_hard is not none %}
+limit_memory_hard = {{ limit_memory_hard }}
+{% endif %}

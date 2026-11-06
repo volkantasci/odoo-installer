@@ -23,6 +23,7 @@ from odoo_installer.core.stack import (
     StackParams,
     compose_yaml,
     env_file,
+    memory_bytes,
     odoo_conf,
     parse_env,
 )
@@ -212,6 +213,9 @@ def resolve_stack_extras(
             proxy_mode=manifest.proxy_mode,
             list_db=manifest.list_db,
             workers=manifest.workers,
+            max_cron_threads=manifest.max_cron_threads,
+            limit_memory_soft=manifest.limit_memory_soft,
+            limit_memory_hard=manifest.limit_memory_hard,
         )
     )
     if extras is None:
@@ -263,6 +267,13 @@ def create_instance_plan(
         proxy_mode=bool(effective.proxy_mode),
         list_db=bool(effective.list_db),
         workers=effective.workers,
+        max_cron_threads=effective.max_cron_threads,
+        limit_memory_soft=(
+            memory_bytes(effective.limit_memory_soft) if effective.limit_memory_soft else None
+        ),
+        limit_memory_hard=(
+            memory_bytes(effective.limit_memory_hard) if effective.limit_memory_hard else None
+        ),
         odoo_login=odoo_login,
         odoo_password=odoo_password,
     )
@@ -425,6 +436,9 @@ def _manifest_step(
         manifest.proxy_mode = bool(effective.proxy_mode)
         manifest.list_db = bool(effective.list_db)
         manifest.workers = effective.workers
+        manifest.max_cron_threads = effective.max_cron_threads
+        manifest.limit_memory_soft = effective.limit_memory_soft
+        manifest.limit_memory_hard = effective.limit_memory_hard
         save_manifest(fs, manifest)
         return "updated" if existing is not None else "created"
 

@@ -6,6 +6,7 @@ from odoo_installer.core.stack import (
     StackParams,
     compose_yaml,
     env_file,
+    memory_bytes,
     odoo_conf,
     parse_env,
 )
@@ -152,3 +153,34 @@ def test_env_file_carries_odoo_admin_credentials() -> None:
     )
     assert "ODOO_ADMIN_LOGIN=admin" in content
     assert "ODOO_ADMIN_PASSWORD=odoosecret" in content
+
+
+def test_memory_bytes_units() -> None:
+    assert memory_bytes("512") == 512
+    assert memory_bytes("1k") == 1024
+    assert memory_bytes("1536m") == 1610612736
+    assert memory_bytes("2g") == 2147483648
+
+
+def test_odoo_conf_cron_and_memory_knobs_one_per_line() -> None:
+    conf = odoo_conf(
+        StackParams(
+            name="acme",
+            odoo_image="odoo:19.0",
+            pg_tag=17,
+            http_port=0,
+            pg_password="p",
+            admin_passwd="a",
+            workers=1,
+            max_cron_threads=1,
+            limit_memory_soft=memory_bytes("1536m"),
+            limit_memory_hard=memory_bytes("2g"),
+        )
+    )
+    lines = conf.splitlines()
+    assert "workers = 1" in lines
+    assert "max_cron_threads = 1" in lines
+    assert "limit_memory_soft = 1610612736" in lines
+    assert "limit_memory_hard = 2147483648" in lines
+    classic = odoo_conf(PARAMS)
+    assert "max_cron_threads" not in classic and "limit_memory" not in classic

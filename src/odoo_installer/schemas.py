@@ -143,6 +143,9 @@ class StackExtras(BaseModel):
     proxy_mode: bool | None = None
     list_db: bool | None = None
     workers: int | None = None
+    max_cron_threads: int | None = None
+    limit_memory_soft: str | None = None  # "512", "1536m", "2g"
+    limit_memory_hard: str | None = None
     odoo_login: str = "admin"
 
     def resolved(self) -> StackExtras:
@@ -161,6 +164,9 @@ class StackExtras(BaseModel):
             ),
             list_db=True if self.list_db is None else self.list_db,
             workers=self.workers,
+            max_cron_threads=self.max_cron_threads,
+            limit_memory_soft=self.limit_memory_soft,
+            limit_memory_hard=self.limit_memory_hard,
             odoo_login=self.odoo_login,
         )
 
@@ -201,3 +207,6 @@ class InstanceManifest(BaseModel):
     proxy_mode: bool = False
     list_db: bool = True
     workers: int | None = None
+    max_cron_threads: int | None = None
+    limit_memory_soft: str | None = None
+    limit_memory_hard: str | None = None

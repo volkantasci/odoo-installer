@@ -12,9 +12,10 @@ import re
 import tomllib
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from odoo_installer.constants import ODOO_VERSION
+from odoo_installer.core.stack import memory_bytes
 from odoo_installer.exceptions import ConfigError, StackError
 from odoo_installer.schemas import INSTANCE_NAME_PATTERN, StackExtras
 
@@ -35,6 +36,12 @@ class ResourcesSpec(BaseModel):
     cpus: float | None = Field(default=None, gt=0)
 
 
+# The smallest memory limit a spec may set. Odoo applies limit_memory_hard as
+# RLIMIT_AS, so "0" (or a few MiB) means no worker can even start: below this
+# floor a value is a typo, never a calibration.
+MEMORY_LIMIT_FLOOR = "256m"
+
+
 class SettingsSpec(BaseModel):
     """odoo.conf knobs the CLI renders."""
 
@@ -43,6 +50,28 @@ class SettingsSpec(BaseModel):
     proxy_mode: bool | None = None
     list_db: bool | None = None
     workers: int | None = Field(default=None, ge=0)
+    max_cron_threads: int | None = Field(default=None, ge=0)
+    limit_memory_soft: str | None = Field(default=None, pattern=r"^\d+[kmg]?$")
+    limit_memory_hard: str | None = Field(default=None, pattern=r"^\d+[kmg]?$")
+
+    @field_validator("limit_memory_soft", "limit_memory_hard")
+    @classmethod
+    def _above_floor(cls, value: str | None) -> str | None:
+        if value is not None and memory_bytes(value) < memory_bytes(MEMORY_LIMIT_FLOOR):
+            raise ValueError(
+                f"{value!r} is below the {MEMORY_LIMIT_FLOOR} floor: Odoo workers could not start"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _soft_within_hard(self) -> SettingsSpec:
+        soft, hard = self.limit_memory_soft, self.limit_memory_hard
+        if soft is not None and hard is not None and memory_bytes(soft) > memory_bytes(hard):
+            raise ValueError(
+                f"limit_memory_soft {soft!r} is above limit_memory_hard {hard!r}; "
+                "the soft limit must not exceed the hard one"
+            )
+        return self
 
 
 class RepoSpec(BaseModel):
@@ -172,5 +201,8 @@ def spec_to_extras(spec: StackSpec) -> StackExtras:
         proxy_mode=spec.settings.proxy_mode if spec.settings else None,
         list_db=spec.settings.list_db if spec.settings else None,
         workers=spec.settings.workers if spec.settings else None,
+        max_cron_threads=spec.settings.max_cron_threads if spec.settings else None,
+        limit_memory_soft=spec.settings.limit_memory_soft if spec.settings else None,
+        limit_memory_hard=spec.settings.limit_memory_hard if spec.settings else None,
         odoo_login=spec.admin_login,
     )
