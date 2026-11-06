@@ -171,6 +171,16 @@ def database_comment(
     return out.strip()
 
 
+def login_count(
+    docker: ComposeLike, stack_dir: Path, db_service: str, db_user: str, name: str
+) -> str:
+    """Raw `count(*)` of res_users_log: oii's own first init never logs in."""
+    validate_db_name(name)
+    return _psql_exec(
+        docker, stack_dir, db_service, db_user, "SELECT count(*) FROM res_users_log", db=name
+    ).strip()
+
+
 def drop_database_plan(
     docker: ComposeLike, stack_dir: Path, db_service: str, db_user: str, name: str
 ) -> list[Step]:

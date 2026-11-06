@@ -11,8 +11,10 @@ is safe to re-run and to loop.
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import functools
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -28,6 +30,7 @@ from odoo_installer.core.dbms import (
     create_database,
     database_comment,
     force_drop_database,
+    login_count,
     module_states,
     set_database_comment,
 )
@@ -62,6 +65,29 @@ class ApplyPlan:
     stack_dir: Path
     created: bool
     steps: list[Step] = field(default_factory=list)
+
+
+@contextlib.contextmanager
+def apply_lock(registry_path: Path, name: str) -> Iterator[None]:
+    """Exclusive, non-blocking per-instance lock held for a whole apply.
+
+    The lock file lives in a `locks/` directory next to the registry, so it
+    exists before the stack directory does (a fresh create has no stack dir yet).
+    """
+    lock_dir = registry_path.parent / "locks"
+    try:
+        lock_dir.mkdir(parents=True, exist_ok=True)
+        handle = (lock_dir / f"apply-{name}.lock").open("a")
+    except OSError as exc:
+        raise StackError(f"cannot create the apply lock for {name}: {exc}") from exc
+    try:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            raise StackError(f"another apply is running for {name}") from None
+        yield
+    finally:
+        handle.close()  # closing releases the flock
 
 
 def build_apply_plan(
@@ -317,23 +343,39 @@ def _install_step(
                 "for this database in the spec"
             )
         states = _states_safe(docker, manifest, db, modules)
-        if states is not None and all(states.get(m) == "installed" for m in modules):
-            return f"{db!r}: all requested modules already installed"
         # a successful module-state query proves Odoo's tables exist
         initialized = states is not None or _db_initialized(docker, manifest, db)
-        recreated = ""
-        if initialized and (
+        # checked BEFORE the "already installed" return: an init killed after
+        # `odoo -i` but before the credentials were set looks fully installed
+        interrupted = initialized and (
             database_comment(docker, manifest.dir, manifest.db_service, manifest.db_user, db)
             == FIRST_INIT_PENDING
+        )
+        if (
+            not interrupted
+            and states is not None
+            and all(states.get(m) == "installed" for m in modules)
         ):
-            # a previous first init was interrupted after Odoo created its tables
-            # but before the real credentials were set: redo it from scratch
-            force_drop_database(docker, manifest.dir, manifest.db_service, manifest.db_user, db)
-            create_database(docker, manifest.dir, manifest.db_service, manifest.db_user, db)
-            initialized = False
+            return f"{db!r}: all requested modules already installed"
+        recreated = ""
+        if interrupted:
+            _refuse_if_logins(docker, manifest, db)
             recreated = (
-                f"interrupted first init of {db!r} detected: database dropped and re-created; "
+                f"interrupted first init of {db!r} found (pending marker); "
+                "database dropped and re-created for a clean first init; "
             )
+            from odoo_installer.console import console
+
+            console.print(f"[yellow]{recreated.rstrip('; ')}[/yellow]")
+            try:
+                force_drop_database(docker, manifest.dir, manifest.db_service, manifest.db_user, db)
+                create_database(docker, manifest.dir, manifest.db_service, manifest.db_user, db)
+            except Exception as redo_err:
+                raise StackError(
+                    f"interrupted first init of {db!r} found, but dropping and re-creating "
+                    f"the database failed: {redo_err}"
+                ) from redo_err
+            initialized = False
         first_init = not initialized
         login = _secret_or(fs, stack_dir, "ODOO_ADMIN_LOGIN") or "admin"
         password = _secret_or(fs, stack_dir, "ODOO_ADMIN_PASSWORD") if first_init else None
@@ -364,6 +406,7 @@ def _install_step(
 
         load_language = defaults.lang if first_init and defaults is not None else None
         pw = password
+        marker = {"state": "none"}  # none | pending | cleared
 
         def first_init_sequence() -> str:
             def install(mods: list[str], language: str | None = None) -> str:
@@ -375,6 +418,7 @@ def _install_step(
                 set_database_comment(
                     docker, manifest.dir, manifest.db_service, manifest.db_user, db, comment
                 )
+                marker["state"] = "pending" if comment else "cleared"
 
             # durable marker: if apply dies after Odoo created its tables (even
             # SIGKILL) but before the real credentials are set, the next apply
@@ -412,12 +456,20 @@ def _install_step(
             # initialized database, skip the defaults and leave admin/admin on a
             # routed tenant. An oii-managed db at this point holds no Odoo data.
             what = str(err) if isinstance(err, StackError) else f"{type(err).__name__}: {err}"
+            if recreated:
+                what = f"{recreated}the redo failed: {what}"
             try:
                 force_drop_database(docker, manifest.dir, manifest.db_service, manifest.db_user, db)
             except Exception as drop_err:
+                follow_up = {
+                    "pending": "the pending first-init marker makes the next apply drop and "
+                    "redo it",
+                    "cleared": "its admin credentials and defaults were already applied, so "
+                    "the next apply continues the install",
+                }.get(marker["state"], f"drop it manually before the next apply ({db!r})")
                 raise StackError(
                     f"{what}; database {db!r} could not be removed after the failed first "
-                    f"init ({drop_err}); drop it manually before the next apply"
+                    f"init ({drop_err}); {follow_up}"
                 ) from err
             raise StackError(
                 f"{what}; database {db!r} was removed so the next apply starts a clean first init"
@@ -427,6 +479,28 @@ def _install_step(
         description=f"install modules {', '.join(modules)} into db {db!r} "
         "(visibility and whitelist verified at run time)",
         run=run,
+    )
+
+
+def _refuse_if_logins(docker: ComposeLike, manifest: InstanceManifest, db: str) -> None:
+    """Hard guard before dropping an interrupted first init: only an exact "0" passes."""
+    try:
+        count = login_count(docker, manifest.dir, manifest.db_service, manifest.db_user, db)
+        error: str | None = None if count == "0" else f"res_users_log count was {count!r}"
+    except Exception as exc:
+        error = f"could not read res_users_log ({exc})"
+    if error is None:
+        return
+    clear = (
+        f"cd {manifest.dir} && docker compose exec -T {manifest.db_service} "
+        f"psql -U {manifest.db_user} -d postgres "
+        f"-c 'COMMENT ON DATABASE \"{db}\" IS NULL'"
+    )
+    raise StackError(
+        f"database {db!r} carries the pending first-init marker but oii cannot prove nobody "
+        f"logged in ({error}), so oii will not drop it. Its admin credentials may still be "
+        "Odoo's default: verify them (reset the admin password if needed), then clear the "
+        f"marker with: {clear}"
     )
 
 
@@ -457,6 +531,8 @@ def _db_initialized(docker: ComposeLike, manifest: InstanceManifest, db: str) ->
     tables = query("SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'")
     if tables == "0":
         return False
+    if not (tables.isdigit() and int(tables) > 0):
+        raise StackError(f"unexpected psql output while checking database {db!r}: {tables!r}")
     raise StackError(
         f"database {db!r} has tables but no Odoo registry (psql said {tables!r}); "
         "refusing to initialise or drop it"

@@ -714,6 +714,7 @@ TABLE_COUNT_SQL = "SELECT count(*)"
 STATES_SQL = "FROM ir_module_module WHERE name IN"
 COMMENT_SQL = "shobj_description"
 PENDING = "oii:first-init-pending"
+LOGIN_COUNT_SQL = "FROM res_users_log"
 
 
 def _run_real_detection(
@@ -816,13 +817,15 @@ def test_pending_marker_at_start_drops_recreates_and_redoes_first_init(
         {
             STATES_SQL: "",  # query ran: tables exist (module absent)
             COMMENT_SQL: PENDING,
-            "FROM pg_database WHERE datname = 'shop'": PENDING,
+            LOGIN_COUNT_SQL: "0",
         }
     )
     note = _run_real_detection(
         monkeypatch, tmp_path, docker, ["base", "account"], DatabaseDefaults(country="TR")
     )
     trace = [t for t in _trace(docker) if "shobj" not in t and "ir_module_module" not in t]
+    assert trace[0] == "shop: SELECT count(*) FROM res_users_log"  # login guard first
+    trace = trace[1:]
     assert trace[0] == 'postgres: DROP DATABASE IF EXISTS "shop" WITH (FORCE)'
     assert trace[1].startswith("postgres: SELECT 1 FROM pg_database")  # create_database probe
     assert trace[2] == 'postgres: CREATE DATABASE "shop"'
@@ -935,3 +938,121 @@ def test_force_drop_refuses_protected_databases(name: str) -> None:
     with pytest.raises(StackError, match="protected"):
         force_drop_database(docker, Path("/x"), "db", "odoo", name)
     assert docker.compose_calls == []
+
+
+def _pending_rules(
+    logins: str | Exception = "0", states: str = "base|installed\naccount|installed"
+):
+    return {STATES_SQL: states, COMMENT_SQL: PENDING, LOGIN_COUNT_SQL: logins}
+
+
+def _redo_trace(docker: FakeDocker) -> list[str]:
+    return [t for t in _trace(docker) if t.startswith("odoo") or "DROP" in t or "CREATE DATA" in t]
+
+
+def test_pending_marker_with_everything_installed_still_redoes_single_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker = ScriptDocker(_pending_rules())
+    note = _run_real_detection(
+        monkeypatch, tmp_path, docker, ["base", "account"], DatabaseDefaults(lang="tr_TR")
+    )
+    assert _redo_trace(docker) == [
+        'postgres: DROP DATABASE IF EXISTS "shop" WITH (FORCE)',
+        'postgres: CREATE DATABASE "shop"',
+        "odoo -i base,account",
+        "odoo shell",
+    ]
+    assert "interrupted first init" in note
+
+
+def test_pending_marker_with_base_only_still_redoes_staged_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker = ScriptDocker(_pending_rules(states="base|installed"))
+    _run_real_detection(monkeypatch, tmp_path, docker, ["base"], DatabaseDefaults(country="TR"))
+    assert _redo_trace(docker) == [
+        'postgres: DROP DATABASE IF EXISTS "shop" WITH (FORCE)',
+        'postgres: CREATE DATABASE "shop"',
+        "odoo -i base",
+        "odoo shell",
+    ]
+
+
+@pytest.mark.parametrize(
+    "logins", ["3", "1\nTime: 2 ms", "", StackError('relation "res_users_log" does not exist')]
+)
+def test_pending_marker_never_drops_a_database_with_logins(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, logins: str | Exception
+) -> None:
+    docker = ScriptDocker(_pending_rules(logins=logins))
+    with pytest.raises(StackError, match="will not drop it") as exc:
+        _run_real_detection(
+            monkeypatch, tmp_path, docker, ["base", "account"], DatabaseDefaults(country="TR")
+        )
+    assert 'COMMENT ON DATABASE "shop" IS NULL' in str(exc.value)
+    assert "psql" in str(exc.value) and "default" in str(exc.value)
+    assert _redo_trace(docker) == []
+
+
+def test_failed_redo_says_it_was_an_interrupted_init_that_was_dropped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class Docker(ScriptDocker):
+        def compose_transfer(self, args, project_dir, **kw):  # type: ignore[no-untyped-def]
+            super().compose_transfer(args, project_dir, **kw)
+            raise StackError("boom in shell")
+
+    docker = Docker(_pending_rules())
+    with pytest.raises(StackError, match="boom in shell") as exc:
+        _run_real_detection(monkeypatch, tmp_path, docker, ["base", "account"], DatabaseDefaults())
+    assert "interrupted first init" in str(exc.value)
+    assert "dropped and re-created" in str(exc.value)
+
+
+def test_failed_drop_after_marker_points_at_the_marker_recovery(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    class Docker(ScriptDocker):
+        def compose_transfer(self, args, project_dir, **kw):  # type: ignore[no-untyped-def]
+            super().compose_transfer(args, project_dir, **kw)
+            raise StackError("boom in shell")
+
+        def compose(self, args, project_dir, timeout_s=300):  # type: ignore[no-untyped-def]
+            if "DROP DATABASE" in args[-1]:
+                raise StackError("pg down")
+            return super().compose(args, project_dir, timeout_s)
+
+    with pytest.raises(StackError, match="boom in shell") as exc:
+        _run_real_detection(
+            monkeypatch, tmp_path, Docker(_fresh_rules()), ["base"], DatabaseDefaults()
+        )
+    assert "could not be removed" in str(exc.value) and "pg down" in str(exc.value)
+    assert "manually" not in str(exc.value)
+    assert "next apply" in str(exc.value)
+
+
+def test_garbled_table_count_is_unexpected_output_not_foreign_tables(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    docker = ScriptDocker(
+        {STATES_SQL: NO_RELATION, REGISTRY_SQL: "", TABLE_COUNT_SQL: "3\nTime: 1ms"}
+    )
+    with pytest.raises(StackError, match="unexpected psql output"):
+        _run_real_detection(monkeypatch, tmp_path, docker, ["base"], DatabaseDefaults())
+
+
+def test_apply_lock_is_exclusive_per_instance(tmp_path: Path) -> None:
+    from odoo_installer.core.apply import apply_lock
+
+    registry = tmp_path / "state" / "registry.toml"  # directory does not exist yet
+    with apply_lock(registry, "acme"):
+        with (
+            pytest.raises(StackError, match="another apply is running for acme"),
+            apply_lock(registry, "acme"),
+        ):
+            pass
+        with apply_lock(registry, "other"):  # other instances are independent
+            pass
+    with apply_lock(registry, "acme"):  # released afterwards
+        pass

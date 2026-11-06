@@ -38,6 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the first Odoo command until the defaults script has committed. If apply died
   in between (even SIGKILL), the next apply finds the marker, drops and
   re-creates the database and runs a clean first init in the same run.
+- **Pending marker is checked before the "already installed" shortcut**, and the
+  redo never drops a database anyone has logged into: it requires
+  `res_users_log` to count exactly 0 and otherwise refuses with the psql command
+  that clears the marker. A failed redo says it was an interrupted first init.
+- **`oii apply --apply` takes an exclusive per-instance lock**; a concurrent
+  run fails fast with "another apply is running for <name>".
 - **Fail-safe first-init detection.** A successful module-state query proves the
   database is initialised; unexpected psql output, or a database that has tables
   but no Odoo registry, raises instead of being initialised or dropped.
